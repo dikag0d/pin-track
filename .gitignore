@@ -9,5 +9,8 @@ hasil.json
 preview/hasil.mp4
 preview/hasil.json
 preview/hasil_preview.mp4
+pinhole_profile.json
+rekam_*.mp4
+rekam_*.avi
 tmp/
 .python-version

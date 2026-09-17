@@ -1,48 +1,54 @@
-# Pelacak lubang jarum (samping)
+# Pelacak lubang jarum
 
-Pelacak oval untuk rekaman kamera samping pada benda kerja logam. Skrip ini mengikuti alur asli template matching + ECC, dengan kalibrasi ulang untuk `side.webm`: lubang jarum adalah bukaan tabung gelap di ujung kiri permukaan yang mengkilap.
+Monitor dua panel: **kiri SIDE** (samping), **kanan TOP** (atas). Deteksi oval memakai template matching multi-skala + ECC. Koordinat dan diameter dalam piksel pada referensi 640×480, bukan ukuran metrologi.
 
-Oval referensi dikalibrasi secara visual pada bukaan, bukan ukuran metrologi. Jika video atau kamera berubah, kalibrasi ulang `REFERENCE_ELLIPSE`, `TEMPLATE_BOX`, dan `calib/template_side.png`.
+```
+pinhole_gui.py          # titik masuk GUI
+pinhole/
+  params.py             # field, default, validasi
+  vision.py             # pemrosesan citra + PinholeTracker
+  capture.py            # thread kamera/video
+  ui.py                 # PySide6
+pinhole_presisi.py      # batch CLI untuk rekaman samping
+```
+
+Algoritme panel TOP tidak diubah. Panel SIDE memakai kelas yang sama, dengan kalibrasi `samples/side.webm` dan penolak loncatan pusat.
 
 ## Dependensi
 
-- Python 3.10+
-- `numpy`, `opencv-python`
-- `ffmpeg` dan `ffprobe` di PATH
+Python 3.10+, `ffmpeg`/`ffprobe` (untuk CLI batch), dan:
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-## Jalankan
+## GUI
+
+```bash
+python pinhole_gui.py --side samples/side.webm --top top.webm
+```
+
+- Mulai masing-masing panel, atau kamera V4L2.
+- Tab Citra / HSV / Tracking / Kalibrasi / Kamera.
+- Bekukan frame, drag oval, template, dan area pencarian, lalu terapkan.
+- Simpan/muat profil JSON, snapshot, dan rekam overlay.
+
+Jika `top.webm` belum ada, isi path di panel kanan atau biarkan kosong sampai ada sumber.
+
+## Batch SIDE
 
 ```bash
 python pinhole_presisi.py samples/side.webm hasil.mp4
 ```
 
-Keluaran:
+Menulis `hasil.mp4` dan `hasil.json`.
 
-- `hasil.mp4` — video anotasi (oval hijau, titik tengah merah, stempel koordinat)
-- `hasil.json` — pusat, sumbu, sudut, dan skor per frame
+## Kalibrasi SIDE
 
-Frame tanpa lubang (awal rekaman, kamera bergeser, atau buram) ditandai `PINHOLE: tidak terdeteksi`.
-
-Template kustom:
-
-```bash
-python pinhole_presisi.py rekaman.webm keluar.mp4 --template calib/template_side.png
-```
-
-## Kalibrasi
-
-Konstanta di `pinhole_presisi.py` berlaku untuk resolusi **640×480**. Panjang sumbu oval adalah diameter OpenCV.
-
-| Konstanta | Nilai samping (side.webm) |
+| Konstanta | Nilai (`samples/side.webm`) |
 | --- | --- |
-| `REFERENCE_ELLIPSE` | pusat `(190, 171)`, sumbu `(24, 44)`, sudut `-2°` |
-| `TEMPLATE_BOX` | `(168, 138, 48, 64)` |
-| `SEARCH_BOX` | kiri-tengah frame, tempat bukaan biasanya muncul |
+| Oval | pusat `(190, 171)`, sumbu `(24, 44)`, sudut `-2°` |
+| Template | `(168, 138, 48, 64)` |
+| Search | `(0.00, 0.16)–(0.52, 0.55)` |
 
-`calib/template_side.png` adalah crop grayscale bukaan yang jelas (sekitar t=15s). Tracker **tidak** mengambil template dari frame pertama, karena pada video samping lubang belum terlihat di awal.
-
-Overlay kalibrasi: `calib/reference_overlay.png`.
+Referensi penuh: `calib/reference_side.png`. Kalibrasi ulang jika kamera, fokus, atau geometri pengambilan berubah.
