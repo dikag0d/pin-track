@@ -153,6 +153,7 @@ class CameraPane(QGroupBox):
         self.recorder = None
         self.recording = False
         self.record_path = None
+        self.stopping_since = None
         self.inputs = {}
         self.checks = {}
 
@@ -520,6 +521,7 @@ class CameraPane(QGroupBox):
             self.cancel_calibration()
         if self.worker is not None:
             self.worker.stop_event.set()
+            self.stopping_since = time.monotonic()
             self.message.setText("Menghentikan sumber...")
 
     def pause(self, checked):
@@ -528,6 +530,17 @@ class CameraPane(QGroupBox):
                 self.worker.paused.set()
             else:
                 self.worker.paused.clear()
+
+    def _release_worker(self):
+        if self.recording:
+            self.stop_recording()
+            self.record_button.setChecked(False)
+        self.worker = None
+        self.active_source = None
+        self.stopping_since = None
+        self.pause_button.setChecked(False)
+        self.message.setText("Sumber dihentikan. Klik Mulai untuk membuka lagi.")
+        self.update_controls()
 
     def poll(self):
         worker = self.worker
@@ -541,7 +554,7 @@ class CameraPane(QGroupBox):
                 break
             if kind == "reference":
                 self.reference = payload
-            else:
+            elif not worker.stop_event.is_set():
                 self.message.setText(payload)
 
         try:
@@ -549,16 +562,16 @@ class CameraPane(QGroupBox):
         except queue.Empty:
             pass
         else:
-            self.render()
+            if not worker.stop_event.is_set():
+                self.render()
 
-        if not worker.is_alive():
-            if self.recording:
-                self.stop_recording()
-                self.record_button.setChecked(False)
-            self.worker = None
-            self.active_source = None
-            self.pause_button.setChecked(False)
-            self.update_controls()
+        hung = (
+            worker.stop_event.is_set()
+            and self.stopping_since is not None
+            and (time.monotonic() - self.stopping_since) > 2.0
+        )
+        if not worker.is_alive() or hung:
+            self._release_worker()
 
     def render(self, *_):
         if self.frozen is not None:
