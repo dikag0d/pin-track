@@ -32,6 +32,7 @@ SEARCH_BOX = (0.00, 0.16, 0.52, 0.55)
 MIN_MATCH = 0.58
 MIN_MATCH_TRACK = 0.50
 MIN_ECC = 0.72
+MAX_CENTER_JUMP = 42.0
 CALIB_SIZE = (640, 480)
 SCALES = (0.80, 0.88, 0.95, 1.0, 1.07, 1.15)
 
@@ -119,17 +120,19 @@ class PinholeTracker:
     def detect(self, frame):
         gray = _gray(frame)
         matched = self._match(gray, SEARCH_BOX, MIN_MATCH)
+        from_local = False
         if matched is None and self.last_center is not None:
             h, w = gray.shape
             cx, cy = self.last_center
-            pad_x, pad_y = 0.14, 0.16
+            pad_x, pad_y = 0.12, 0.12
             local = (
-                max(0.0, (cx / w) - pad_x),
-                max(0.0, (cy / h) - pad_y),
-                min(1.0, (cx / w) + pad_x),
-                min(1.0, (cy / h) + pad_y),
+                max(SEARCH_BOX[0], (cx / w) - pad_x),
+                max(SEARCH_BOX[1], (cy / h) - pad_y),
+                min(SEARCH_BOX[2], (cx / w) + pad_x),
+                min(SEARCH_BOX[3], (cy / h) + pad_y),
             )
             matched = self._match(gray, local, MIN_MATCH_TRACK)
+            from_local = matched is not None
         if matched is None:
             return None
         score, px, py, template = matched
@@ -168,8 +171,16 @@ class PinholeTracker:
         affine[0, 2] += px
         affine[1, 2] += py
         ellipse = transformed_ellipse(self.ellipse, affine[:2])
-        self.last_center = ellipse[0]
-        return {"ellipse": ellipse, "center": ellipse[0], "score": float(score)}
+        center = ellipse[0]
+        if self.last_center is not None:
+            dx = float(center[0] - self.last_center[0])
+            dy = float(center[1] - self.last_center[1])
+            jump = (dx * dx + dy * dy) ** 0.5
+            if jump > MAX_CENTER_JUMP and (from_local or score < 0.72):
+                self.last_center = None
+                return None
+        self.last_center = center
+        return {"ellipse": ellipse, "center": center, "score": float(score)}
 
 
 def draw(frame, result):
