@@ -891,7 +891,10 @@ class MainWindow(QMainWindow):
         )
 
         screen = QApplication.primaryScreen().availableGeometry()
-        self.resize(min(1500, screen.width()), min(980, screen.height()))
+        self.resize(min(1500, screen.width() - 40), min(980, screen.height() - 40))
+        frame = self.frameGeometry()
+        frame.moveCenter(screen.center())
+        self.move(frame.topLeft())
 
     def pane(self, role):
         for item in self.panes:
@@ -1053,7 +1056,7 @@ QPushButton {
 }
 QPushButton:hover { background: #31536f; }
 QPushButton:checked { background: #146b70; }
-QPushButton:disabled { color: #64758a; background: #1a293b; }
+QPushButton:disabled { color: #8ea0b5; background: #1a293b; }
 QLineEdit, QComboBox, QDoubleSpinBox {
     background: #0c1725;
     border: 1px solid #40536a;
