@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pelacak lubang jarum</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #101216;
+        --card: #1a1e26;
+        --text: #e8edf5;
+        --muted: #9aa7b8;
+        --accent: #3ee07f;
+        --miss: #ff6b6b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      main {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 24px 16px 48px;
+      }
+      h1 { font-size: 1.4rem; margin: 0 0 8px; }
+      p { color: var(--muted); line-height: 1.45; }
+      video {
+        width: 100%;
+        background: #000;
+        border-radius: 12px;
+        border: 1px solid #2a3140;
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+        margin: 16px 0 20px;
+      }
+      .card {
+        background: var(--card);
+        border-radius: 10px;
+        padding: 12px 14px;
+      }
+      .card strong { display: block; font-size: 1.25rem; color: var(--accent); }
+      .card span { color: var(--muted); font-size: 0.85rem; }
+      pre {
+        background: var(--card);
+        padding: 12px 14px;
+        border-radius: 10px;
+        overflow: auto;
+        font-size: 0.85rem;
+      }
+      @media (max-width: 640px) {
+        .stats { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Deteksi lubang jarum — rekaman samping</h1>
+      <p>
+        Oval hijau menandai bukaan tabung. Titik merah adalah pusat.
+        Frame tanpa kunci template menampilkan <em>tidak terdeteksi</em>.
+      </p>
+      <div class="stats">
+        <div class="card"><strong id="detected">—</strong><span>frame terdeteksi</span></div>
+        <div class="card"><strong id="total">—</strong><span>total frame</span></div>
+        <div class="card"><strong id="rate">—</strong><span>rasio deteksi</span></div>
+      </div>
+      <video controls playsinline src="./hasil_preview.mp4"></video>
+      <p>Contoh baris JSON (lima deteksi pertama):</p>
+      <pre id="sample">Memuat hasil.json…</pre>
+    </main>
+    <script>
+      fetch("./hasil.json")
+        .then((r) => r.json())
+        .then((rows) => {
+          const hits = rows.filter((r) => r.detected);
+          document.getElementById("detected").textContent = hits.length;
+          document.getElementById("total").textContent = rows.length;
+          document.getElementById("rate").textContent =
+            ((100 * hits.length) / rows.length).toFixed(1) + "%";
+          document.getElementById("sample").textContent = JSON.stringify(
+            hits.slice(0, 5),
+            null,
+            2
+          );
+        })
+        .catch(() => {
+          document.getElementById("sample").textContent =
+            "hasil.json belum ada. Jalankan pinhole_presisi.py terlebih dahulu.";
+        });
+    </script>
+  </body>
+</html>

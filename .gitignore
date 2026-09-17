@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.DS_Store
+hasil.mp4
+hasil.json
+preview/hasil.mp4
+preview/hasil.json
+preview/hasil_preview.mp4
+tmp/
+.python-version
