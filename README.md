@@ -50,6 +50,8 @@ Saat perpindahan di bawah radius diam (default 3.2 px/frame, dan 1.6 px untuk pe
 
 Default menganggap benang masuk dari tepi kanan. Untuk kamera yang benangnya masuk dari kiri, matikan centang itu di tab Benang. Profil JSON versi 3 menyimpan parameter ini per panel.
 
+Oval ujung dikunci ke lebar kalibrasi karena lebar benang tidak berubah. Posisi oval tetap mengikuti ujung. Sesuaikan dengan drag **Oval ujung benang** di tab Kalibrasi, atau tombol **Kunci oval ke lebar benang**. Angka oval memakai referensi 640×480, sama seperti oval lubang.
+
 Jika `top.webm` belum ada, isi path di panel kanan atau biarkan kosong sampai ada sumber.
 
 ## Batch SIDE

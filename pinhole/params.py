@@ -64,6 +64,15 @@ THREAD_SMOOTH_FIELDS = [
     ("thread_quiet_alpha", "Perataan sangat diam", 0.0, 1.0, 0.32, 0.01),
 ]
 
+# Oval ujung pada referensi 640 x 480. Lebar dikunci karena benang tidak berubah.
+THREAD_OVAL_FIELDS = [
+    ("thread_oval_along", "Oval sepanjang benang", 1.0, 640.0, 12.0, 0.5),
+    ("thread_oval_across", "Lebar benang (oval)", 1.0, 480.0, 18.0, 0.5),
+    ("thread_oval_angle", "Sudut oval benang", -180.0, 180.0, 0.0, 0.5),
+    ("thread_oval_cx", "Pratinjau oval X", 0.0, 640.0, 400.0, 0.5),
+    ("thread_oval_cy", "Pratinjau oval Y", 0.0, 480.0, 230.0, 0.5),
+]
+
 GEOMETRY_FIELDS = [
     ("cx", "Pusat oval X", 0.0, 640.0, 175.5, 0.5),
     ("cy", "Pusat oval Y", 0.0, 480.0, 222.5, 0.5),
@@ -83,6 +92,7 @@ GEOMETRY_FIELDS = [
 ALL_FIELDS = (
     IMAGE_FIELDS + HSV_FIELDS + TRACK_FIELDS + GEOMETRY_FIELDS
     + THREAD_HSV_FIELDS + THREAD_MEASURE_FIELDS + THREAD_SMOOTH_FIELDS
+    + THREAD_OVAL_FIELDS
 )
 
 DEFAULTS = {key: value for key, _, _, _, value, _ in ALL_FIELDS}
@@ -94,6 +104,7 @@ DEFAULTS.update(
     guides=False,
     thread_on=True,
     thread_from_right=True,
+    thread_oval_lock=True,
 )
 
 # Kalibrasi SIDE pada samples/side.webm, bukaan tabung ~t=15s.
@@ -139,7 +150,7 @@ def validate_parameters(p, top=True):
 
     for key in (
         "hsv_on", "invert", "ecc_on", "loop", "guides",
-        "thread_on", "thread_from_right",
+        "thread_on", "thread_from_right", "thread_oval_lock",
     ):
         if key in p and not isinstance(p[key], bool):
             raise ValueError(f"Parameter harus boolean: {key}")

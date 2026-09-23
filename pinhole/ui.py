@@ -36,12 +36,13 @@ from pinhole.params import (
     SIDE_REFERENCE,
     THREAD_HSV_FIELDS,
     THREAD_MEASURE_FIELDS,
+    THREAD_OVAL_FIELDS,
     THREAD_SMOOTH_FIELDS,
     TRACK_FIELDS,
     defaults_for,
     validate_parameters,
 )
-from pinhole.thread_tip import draw_thread
+from pinhole.thread_tip import draw_thread, draw_thread_guide
 from pinhole.vision import draw_detection, draw_guides, prepare_image, tracker_for
 
 RESOLUTIONS = ("640x480", "800x600", "1280x720", "1920x1080")
@@ -298,6 +299,24 @@ class CameraPane(QGroupBox):
         self.add_check(
             thread_form, "thread_from_right", "Benang masuk dari tepi kanan"
         )
+        self.add_check(
+            thread_form,
+            "thread_oval_lock",
+            "Kunci ukuran oval (lebar benang tetap)",
+        )
+        self.lock_oval_button = QPushButton("Kunci oval ke lebar benang")
+        self.lock_oval_button.clicked.connect(self.lock_thread_oval)
+        thread_form.addRow(self.lock_oval_button)
+        oval_note = QLabel(
+            "Lebar benang tidak berubah, jadi ukuran oval dikunci. "
+            "Posisi tetap mengikuti ujung. Sudut 0: lebar diukur vertikal. "
+            "Drag \"Oval ujung benang\" di tab Kalibrasi untuk menyesuaikan, "
+            "atau pakai tombol di atas agar lebar diambil dari benang yang terukur. "
+            "Pratinjau X/Y hanya menempatkan oval pada frame beku."
+        )
+        oval_note.setWordWrap(True)
+        thread_form.addRow(oval_note)
+        self.add_fields(thread_form, THREAD_OVAL_FIELDS)
         thread_note = QLabel(
             "Ujung bebas (tidak terpotong tepi gambar) diukur subpiksel pada "
             "mask sebelum penutupan. Saat perpindahan di bawah radius diam, "
@@ -334,15 +353,19 @@ class CameraPane(QGroupBox):
         self.cancel_button.clicked.connect(self.cancel_calibration)
 
         self.selection_mode = QComboBox()
-        self.selection_mode.addItems(["Oval", "Template", "Area pencarian"])
+        self.selection_mode.addItems([
+            "Oval", "Template", "Area pencarian", "Oval ujung benang",
+        ])
         geometry_form.addRow(self.calibration_button)
         geometry_form.addRow(self.cancel_button)
         geometry_form.addRow("Objek yang di-drag", self.selection_mode)
 
         note = QLabel(
             "Bekukan, drag pada gambar, lalu terapkan. "
-            "Kuning: template; biru: search; hijau: oval. "
-            "Angka geometri memakai referensi 640 x 480."
+            "Kuning: template; biru: search; hijau: oval lubang; "
+            "cyan: oval ujung benang. "
+            "Angka geometri memakai referensi 640 x 480. "
+            "Oval benang yang dikunci mengikuti ujung saat pelacakan."
         )
         note.setWordWrap(True)
         geometry_form.addRow(note)
@@ -627,7 +650,7 @@ class CameraPane(QGroupBox):
             try:
                 p = self.parameters()
                 adjusted, _, _ = prepare_image(self.frozen, p)
-                self.shown = draw_guides(adjusted, p)
+                self.shown = draw_thread_guide(draw_guides(adjusted, p), p)
                 self.view.set_frame(self.shown)
             except (ValueError, cv2.error) as exc:
                 self.message.setText(str(exc))
@@ -701,9 +724,15 @@ class CameraPane(QGroupBox):
             self._set_thread_readout("Ujung benang: tidak terdeteksi")
             return
         tip_x, tip_y = thread["tip"]
+        body = thread.get("body_thickness")
+        width_txt = f" | lebar {body:.1f} px" if body else ""
+        if thread.get("oval_locked"):
+            along, across = thread["tip_ellipse"][1]
+            oval_txt = f" | oval kunci {along:.1f}×{across:.1f}"
+        else:
+            oval_txt = f" | tebal {thread['local_thickness']:.1f} px"
         self._set_thread_readout(
-            f"Ujung benang: {tip_x:.1f}, {tip_y:.1f} px"
-            f" | tebal {thread['local_thickness']:.1f} px"
+            f"Ujung benang: {tip_x:.1f}, {tip_y:.1f} px{width_txt}{oval_txt}"
         )
 
     def calibrate(self):
@@ -723,9 +752,10 @@ class CameraPane(QGroupBox):
             self.view.selecting = True
             self.calibration_button.setText("Terapkan referensi")
             self.cancel_button.setEnabled(True)
+            self._place_thread_oval_preview()
             self.message.setText(
-                "Drag oval, template, dan search pada frame beku. "
-                "Sesuaikan sudut oval bila diperlukan."
+                "Drag oval lubang, template, search, atau oval ujung benang. "
+                "Oval cyan dikunci ukurannya; saat jalan ia menempel di ujung."
             )
             self.update_controls()
             self.render()
@@ -778,6 +808,17 @@ class CameraPane(QGroupBox):
                 rx0=x0 / width, ry0=y0 / height,
                 rx1=x1 / width, ry1=y1 / height,
             )
+        elif mode == "Oval ujung benang":
+            x0, x1 = x0 * 640 / width, x1 * 640 / width
+            y0, y1 = y0 * 480 / height, y1 * 480 / height
+            p.update(
+                thread_oval_cx=(x0 + x1) / 2,
+                thread_oval_cy=(y0 + y1) / 2,
+                thread_oval_along=max(1.0, x1 - x0),
+                thread_oval_across=max(1.0, y1 - y0),
+                thread_oval_angle=0.0,
+                thread_oval_lock=True,
+            )
         else:
             x0, x1 = x0 * 640 / width, x1 * 640 / width
             y0, y1 = y0 * 480 / height, y1 * 480 / height
@@ -793,6 +834,48 @@ class CameraPane(QGroupBox):
                 )
 
         self.fill_parameters(p)
+
+    def _place_thread_oval_preview(self):
+        """Taruh pratinjau oval cyan di ujung yang terakhir terukur."""
+        packet = self.packet
+        thread = None if packet is None else packet.get("thread")
+        if thread is None or self.frozen is None:
+            return
+        height, width = self.frozen.shape[:2]
+        p = self.parameters()
+        tip_x, tip_y = thread["tip"]
+        p["thread_oval_cx"] = float(tip_x) * 640.0 / width
+        p["thread_oval_cy"] = float(tip_y) * 480.0 / height
+        self.fill_parameters(p)
+
+    def lock_thread_oval(self):
+        """Kunci diameter oval ke lebar badan benang yang sedang terukur."""
+        packet = self.packet
+        thread = None if packet is None else packet.get("thread")
+        if thread is None:
+            QMessageBox.information(
+                self, "Oval ujung",
+                "Ujung benang belum terdeteksi. Mulai sumber sampai ujung tampak.",
+            )
+            return
+        height, width = packet["raw"].shape[:2]
+        body = float(thread.get("body_thickness") or thread["local_thickness"])
+        across = body * 480.0 / height
+        along = float(np.clip(across * 0.6, 6.0, 120.0))
+        tip_x, tip_y = thread["tip"]
+        p = self.parameters()
+        p.update(
+            thread_oval_lock=True,
+            thread_oval_across=across,
+            thread_oval_along=along,
+            thread_oval_angle=float(thread["angle"]),
+            thread_oval_cx=float(tip_x) * 640.0 / width,
+            thread_oval_cy=float(tip_y) * 480.0 / height,
+        )
+        self.fill_parameters(p)
+        self.message.setText(
+            f"Oval dikunci ke lebar benang {across:.1f} px (referensi 480)."
+        )
 
     def apply_hardware(self):
         if self.worker is not None:

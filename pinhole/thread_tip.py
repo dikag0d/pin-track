@@ -6,6 +6,9 @@ penutupan morfologi supaya kernel tidak menggeser ujung.
 
 Saat ujung diam, koordinat diratakan. Saat perpindahan melewati radius
 diam, marker langsung mengikuti pengukuran baru.
+
+Ukuran oval ujung dikunci ke kalibrasi: lebar benang tidak berubah,
+yang mengikuti pengukuran hanya posisi (dan sudut saat kunci mati).
 """
 
 from __future__ import annotations
@@ -197,6 +200,7 @@ class BrownThreadTipTracker:
             "tip": (tip_x, tip_y),
             "tip_ellipse": ((tip_x, tip_y), (along, local), angle),
             "local_thickness": local,
+            "body_thickness": body_thickness,
             "angle": angle,
         }
 
@@ -336,11 +340,60 @@ class BrownThreadTipTracker:
             "tip": (tip_x, tip_y),
             "tip_ellipse": ((tip_x, tip_y), (along, local), angle),
             "local_thickness": local,
+            "body_thickness": float(chosen["body_thickness"]),
             "angle": angle,
+            "oval_locked": False,
         }
         if not from_right:
             result = self._unflip(result, frame.shape[1])
-        return result, display
+        return lock_tip_oval(result, p, frame.shape), display
+
+
+def locked_axes(p, width, height):
+    """Diameter oval dalam piksel frame, diskalakan dari referensi 640 x 480."""
+    sx, sy = width / 640.0, height / 480.0
+    along = max(1.0, float(p["thread_oval_along"]) * sx)
+    across = max(1.0, float(p["thread_oval_across"]) * sy)
+    angle = float(p["thread_oval_angle"])
+    return along, across, angle
+
+
+def thread_guide_ellipse(p, width, height):
+    """Oval kalibrasi pada pusat pratinjau, untuk frame beku."""
+    sx, sy = width / 640.0, height / 480.0
+    along, across, angle = locked_axes(p, width, height)
+    center = (
+        float(p["thread_oval_cx"]) * sx,
+        float(p["thread_oval_cy"]) * sy,
+    )
+    return (center, (along, across), angle)
+
+
+def lock_tip_oval(result, p, shape):
+    """Ganti ukuran oval dengan kalibrasi. Pusat tetap di ujung terukur."""
+    if result is None or not p.get("thread_oval_lock", True):
+        return result
+    height, width = shape[:2]
+    along, across, angle = locked_axes(p, width, height)
+    tip_x, tip_y = result["tip"]
+    locked = dict(result)
+    locked["tip_ellipse"] = ((float(tip_x), float(tip_y)), (along, across), angle)
+    locked["oval_locked"] = True
+    return locked
+
+
+def draw_thread_guide(frame, p):
+    """Oval cyan kalibrasi. Ukuran ini yang dikunci saat pelacakan."""
+    out = frame.copy()
+    height, width = out.shape[:2]
+    try:
+        cv2.ellipse(
+            out, thread_guide_ellipse(p, width, height),
+            (0, 255, 255), 2, cv2.LINE_AA,
+        )
+    except cv2.error:
+        pass
+    return out
 
 
 def draw_thread(frame, thread, enabled=True):
@@ -353,7 +406,7 @@ def draw_thread(frame, thread, enabled=True):
         tip = (int(round(tip_x)), int(round(tip_y)))
         try:
             cv2.ellipse(
-                out, thread["tip_ellipse"], (0, 255, 255), 1, cv2.LINE_AA
+                out, thread["tip_ellipse"], (0, 255, 255), 2, cv2.LINE_AA
             )
         except cv2.error:
             pass

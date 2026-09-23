@@ -90,8 +90,10 @@ class ThreadTipTest(unittest.TestCase):
         validate_parameters(merged, top=False)
         self.assertTrue(merged["thread_on"])
         self.assertTrue(merged["thread_from_right"])
+        self.assertTrue(merged["thread_oval_lock"])
         self.assertEqual(merged["th_hmax"], 22)
         self.assertAlmostEqual(merged["thread_still_radius"], 3.2)
+        self.assertAlmostEqual(merged["thread_oval_across"], 18.0)
 
     def test_rejects_inverted_smooth_radius(self):
         p = defaults_for("side")
@@ -166,6 +168,38 @@ class ThreadTipTest(unittest.TestCase):
         preview = BrownThreadTipTracker().preview_mask(left, p)
         self.assertTrue(np.array_equal(mask, preview))
 
+    def test_locked_oval_keeps_calibrated_width(self):
+        from pinhole.thread_tip import locked_axes
+
+        p = dict(self.params)
+        p["thread_oval_lock"] = True
+        p["thread_oval_along"] = 12.0
+        p["thread_oval_across"] = 21.0
+        p["thread_oval_angle"] = -3.0
+        result, _mask = BrownThreadTipTracker().detect(make_thread_frame(), p)
+        (cx, cy), axes, angle = result["tip_ellipse"]
+        self.assertTrue(result["oval_locked"])
+        self.assertAlmostEqual(axes[0], 12.0)
+        self.assertAlmostEqual(axes[1], 21.0)
+        self.assertAlmostEqual(angle, -3.0)
+        self.assertAlmostEqual(cx, result["tip"][0])
+        self.assertAlmostEqual(cy, result["tip"][1])
+        self.assertGreater(result["body_thickness"], 10.0)
+        self.assertGreater(abs(axes[1] - result["body_thickness"]), 0.5)
+
+        scaled = locked_axes(p, 1280, 960)
+        self.assertAlmostEqual(scaled[0], 24.0)
+        self.assertAlmostEqual(scaled[1], 42.0)
+        self.assertAlmostEqual(scaled[2], -3.0)
+
+    def test_unlocked_oval_follows_measured_width(self):
+        p = dict(self.params)
+        p["thread_oval_lock"] = False
+        p["thread_oval_across"] = 80.0
+        result, _mask = BrownThreadTipTracker().detect(make_thread_frame(), p)
+        self.assertFalse(result["oval_locked"])
+        self.assertLess(result["tip_ellipse"][1][1], 75.0)
+
     def test_blue_thread_is_ignored(self):
         frame = make_thread_frame()
         blue = np.uint8([[[120, 200, 170]]])
@@ -239,8 +273,12 @@ class ThreadGuiTest(unittest.TestCase):
             names = [tabs[0].tabText(i) for i in range(tabs[0].count())]
             self.assertIn("Benang", names)
             self.assertGreaterEqual(pane.view_mode.findText("Mask benang"), 0)
+            self.assertGreaterEqual(
+                pane.selection_mode.findText("Oval ujung benang"), 0
+            )
             self.assertTrue(pane.checks["thread_on"].isChecked())
             self.assertTrue(pane.checks["thread_from_right"].isChecked())
+            self.assertTrue(pane.checks["thread_oval_lock"].isChecked())
 
         side.checks["thread_on"].setChecked(False)
         self.assertFalse(side.parameters()["thread_on"])
@@ -290,6 +328,7 @@ class ThreadGuiTest(unittest.TestCase):
         self.assertIn(f"{thread['tip'][0]:.1f}", text)
         self.assertIn(f"{thread['tip'][1]:.1f}", text)
         self.assertIn("ujung", pane.stats.text())
+        self.assertIn("oval kunci", pane.thread_readout.text())
 
         roi = shown[20:60, 8:320]
         # Teks cyan di atas latar terang: B dan G naik, R turun.
@@ -301,6 +340,37 @@ class ThreadGuiTest(unittest.TestCase):
         self.assertGreater(int(pane.shown.max()), 200)
         self.assertIn(f"{thread['tip'][0]:.1f}", pane.thread_readout.text())
         pane.view_mode.setCurrentIndex(0)
+
+        original = pane.parameters()
+        pane.frozen = frame.copy()
+        try:
+            pane.selection_mode.setCurrentText("Oval ujung benang")
+            pane.select_region(300, 200, 316, 230)
+            dragged = pane.parameters()
+            self.assertTrue(dragged["thread_oval_lock"])
+            self.assertAlmostEqual(dragged["thread_oval_along"], 16.0)
+            self.assertAlmostEqual(dragged["thread_oval_across"], 30.0)
+            self.assertAlmostEqual(dragged["thread_oval_cx"], 308.0)
+            self.assertAlmostEqual(dragged["thread_oval_cy"], 215.0)
+
+            pane.lock_thread_oval()
+            locked = pane.parameters()
+            self.assertAlmostEqual(
+                locked["thread_oval_across"], thread["body_thickness"], places=4
+            )
+            self.assertAlmostEqual(
+                locked["thread_oval_angle"], thread["angle"], delta=0.001
+            )
+            self.assertTrue(locked["thread_oval_lock"])
+            fitted, _mask = BrownThreadTipTracker().detect(frame, locked)
+            pane.packet["thread"] = fitted
+            pane.frozen = None
+            pane.view_mode.setCurrentIndex(0)
+            pane.render()
+            shown = pane.shown.copy()
+        finally:
+            pane.frozen = None
+            pane.fill_parameters(original)
 
         out_path = Path(tempfile.gettempdir()) / "thread_overlay_top.png"
         self.assertTrue(cv2.imwrite(str(out_path), shown))
