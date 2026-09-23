@@ -7,6 +7,7 @@ pinhole_gui.py          # titik masuk GUI
 pinhole/
   params.py             # field, default, validasi
   vision.py             # pemrosesan citra + PinholeTracker
+  thread_tip.py         # ujung bebas benang coklat
   capture.py            # thread kamera/video
   ui.py                 # PySide6
 pinhole_presisi.py      # batch CLI untuk rekaman samping
@@ -29,9 +30,25 @@ python pinhole_gui.py --side samples/side.webm --top top.webm
 ```
 
 - Mulai masing-masing panel, atau kamera V4L2.
-- Tab Citra / HSV / Tracking / Kalibrasi / Kamera.
+- Tab Citra / HSV / Tracking / Benang / Kalibrasi / Kamera.
 - Bekukan frame, drag oval, template, dan area pencarian, lalu terapkan.
 - Simpan/muat profil JSON, snapshot, dan rekam overlay.
+- Tab Benang menyetel HSV, sisi masuk, dan perataan ujung. Tampilan Mask benang menunjukkan segmentasinya.
+
+## Ujung benang
+
+Kedua panel melacak ujung bebas benang coklat/tembaga yang masuk dari tepi gambar. Titik ukur subpiksel ada di mask sebelum penutupan morfologi, jadi kernel tidak menggeser ujung.
+
+Saat perpindahan di bawah radius diam (default 3.2 px/frame, dan 1.6 px untuk perataan lebih kuat), koordinat diratakan supaya marker tidak bergetar. Di atas radius itu, marker langsung mengikuti pengukuran baru.
+
+| Konstanta | Default |
+| --- | --- |
+| HSV | H 0–22, S 60–255, V 18–230 |
+| Luas / lebar minimum | 250 px / 30 px |
+| Batas sisi masuk | 0.50 (komponen melewati tengah, ke arah tepi masuk) |
+| Rasio tebal ujung | 0.30 |
+
+Default menganggap benang masuk dari tepi kanan. Untuk kamera yang benangnya masuk dari kiri, matikan centang itu di tab Benang. Profil JSON versi 3 menyimpan parameter ini per panel.
 
 Jika `top.webm` belum ada, isi path di panel kanan atau biarkan kosong sampai ada sumber.
 

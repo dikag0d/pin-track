@@ -39,6 +39,31 @@ TRACK_FIELDS = [
     ("ecc_shift", "Batas translasi ECC (px)", 1, 100, 10, 1),
 ]
 
+# Benang coklat/tembaga. Hue rendah, saturasi tinggi, bukan latar hampir putih.
+THREAD_HSV_FIELDS = [
+    ("th_hmin", "H minimum benang", 0, 179, 0, 1),
+    ("th_hmax", "H maksimum benang", 0, 179, 22, 1),
+    ("th_smin", "S minimum benang", 0, 255, 60, 1),
+    ("th_smax", "S maksimum benang", 0, 255, 255, 1),
+    ("th_vmin", "V minimum benang", 0, 255, 18, 1),
+    ("th_vmax", "V maksimum benang", 0, 255, 230, 1),
+]
+
+THREAD_MEASURE_FIELDS = [
+    ("thread_min_area", "Luas minimum (px)", 20, 500000, 250, 10),
+    ("thread_min_width", "Lebar minimum (px)", 4, 4000, 30, 1),
+    ("thread_min_right_x", "Batas sisi masuk (0–1)", 0.0, 1.0, 0.50, 0.01),
+    ("thread_max_top", "Y awal komponen maks (0–1)", 0.0, 1.0, 0.92, 0.01),
+    ("thread_tip_ratio", "Rasio tebal ujung", 0.05, 1.0, 0.30, 0.01),
+]
+
+THREAD_SMOOTH_FIELDS = [
+    ("thread_still_radius", "Radius diam (px/frame)", 0.0, 80.0, 3.2, 0.1),
+    ("thread_still_alpha", "Perataan saat diam", 0.0, 1.0, 0.55, 0.01),
+    ("thread_quiet_radius", "Radius sangat diam (px)", 0.0, 80.0, 1.6, 0.1),
+    ("thread_quiet_alpha", "Perataan sangat diam", 0.0, 1.0, 0.32, 0.01),
+]
+
 GEOMETRY_FIELDS = [
     ("cx", "Pusat oval X", 0.0, 640.0, 175.5, 0.5),
     ("cy", "Pusat oval Y", 0.0, 480.0, 222.5, 0.5),
@@ -55,7 +80,10 @@ GEOMETRY_FIELDS = [
     ("ry1", "Search Y akhir (0–1)", 0.0, 1.0, 0.64, 0.01),
 ]
 
-ALL_FIELDS = IMAGE_FIELDS + HSV_FIELDS + TRACK_FIELDS + GEOMETRY_FIELDS
+ALL_FIELDS = (
+    IMAGE_FIELDS + HSV_FIELDS + TRACK_FIELDS + GEOMETRY_FIELDS
+    + THREAD_HSV_FIELDS + THREAD_MEASURE_FIELDS + THREAD_SMOOTH_FIELDS
+)
 
 DEFAULTS = {key: value for key, _, _, _, value, _ in ALL_FIELDS}
 DEFAULTS.update(
@@ -64,6 +92,8 @@ DEFAULTS.update(
     ecc_on=True,
     loop=True,
     guides=False,
+    thread_on=True,
+    thread_from_right=True,
 )
 
 # Kalibrasi SIDE pada samples/side.webm, bukaan tabung ~t=15s.
@@ -107,12 +137,30 @@ def validate_parameters(p, top=True):
         ):
             raise ValueError(f"Parameter tidak valid: {key}")
 
-    for key in ("hsv_on", "invert", "ecc_on", "loop", "guides"):
+    for key in (
+        "hsv_on", "invert", "ecc_on", "loop", "guides",
+        "thread_on", "thread_from_right",
+    ):
         if key in p and not isinstance(p[key], bool):
             raise ValueError(f"Parameter harus boolean: {key}")
 
     if p["smin"] > p["smax"] or p["vmin"] > p["vmax"]:
         raise ValueError("S/V minimum harus <= maksimum.")
+
+    if (
+        "th_smin" in p
+        and (
+            p["th_smin"] > p["th_smax"]
+            or p["th_vmin"] > p["th_vmax"]
+        )
+    ):
+        raise ValueError("S/V benang: minimum harus <= maksimum.")
+
+    if (
+        "thread_quiet_radius" in p
+        and p["thread_quiet_radius"] > p["thread_still_radius"]
+    ):
+        raise ValueError("Radius sangat diam harus <= radius diam.")
 
     if p["scale_min"] > p["scale_max"]:
         raise ValueError("Skala minimum harus <= maksimum.")
