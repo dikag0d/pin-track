@@ -1,1 +1,1 @@
-"""Pelacak lubang jarum: deteksi terpisah dari GUI."""
+"""Pelacak lubang jarum dan ujung benang: deteksi terpisah dari GUI."""

@@ -6,6 +6,7 @@ Jalankan:
 
 Kiri  SIDE: template matching + ECC, kalibrasi samples/side.webm.
 Kanan TOP: template matching multi-skala + ECC affine (algoritme tidak diubah).
+Keduanya juga melacak ujung bebas benang coklat (tab Benang).
 
 Kalibrasi disimpan dalam koordinat referensi 640 x 480.
 Diameter oval dan koordinat hasil merupakan piksel, bukan ukuran metrologi.

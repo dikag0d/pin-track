@@ -1,4 +1,7 @@
-"""Antarmuka PySide6: panel SIDE kiri, panel TOP kanan."""
+"""Antarmuka PySide6: panel SIDE kiri, panel TOP kanan.
+
+Kedua panel melacak oval lubang dan ujung bebas benang coklat.
+"""
 
 from __future__ import annotations
 
@@ -31,10 +34,14 @@ from pinhole.params import (
     HSV_FIELDS,
     IMAGE_FIELDS,
     SIDE_REFERENCE,
+    THREAD_HSV_FIELDS,
+    THREAD_MEASURE_FIELDS,
+    THREAD_SMOOTH_FIELDS,
     TRACK_FIELDS,
     defaults_for,
     validate_parameters,
 )
+from pinhole.thread_tip import draw_thread
 from pinhole.vision import draw_detection, draw_guides, prepare_image, tracker_for
 
 RESOLUTIONS = ("640x480", "800x600", "1280x720", "1920x1080")
@@ -238,6 +245,7 @@ class CameraPane(QGroupBox):
             "Gambar terkoreksi",
             "Mask HSV",
             "Grayscale detektor",
+            "Mask benang",
         ])
         self.view_mode.currentIndexChanged.connect(self.render)
         layout.addWidget(self.view_mode)
@@ -249,6 +257,12 @@ class CameraPane(QGroupBox):
         self.stats = QLabel("Belum ada frame.")
         self.stats.setWordWrap(True)
         layout.addWidget(self.stats)
+
+        self.thread_readout = QLabel()
+        self.thread_readout.setWordWrap(True)
+        self.thread_readout.setTextFormat(Qt.TextFormat.RichText)
+        self._set_thread_readout("Ujung benang: —")
+        layout.addWidget(self.thread_readout)
 
         self.message = QLabel(
             "Preset awal untuk top.webm. Kalibrasi ulang untuk kamera/video lain."
@@ -278,6 +292,39 @@ class CameraPane(QGroupBox):
         self.add_check(tracking_form, "ecc_on", "Aktifkan ECC")
         self.add_check(tracking_form, "guides", "Tampilkan panduan referensi")
         self.add_fields(tracking_form, TRACK_FIELDS)
+
+        thread_form = self.add_tab(tabs, "Benang")
+        self.add_check(thread_form, "thread_on", "Aktifkan deteksi ujung benang")
+        self.add_check(
+            thread_form, "thread_from_right", "Benang masuk dari tepi kanan"
+        )
+        thread_note = QLabel(
+            "Ujung bebas (tidak terpotong tepi gambar) diukur subpiksel pada "
+            "mask sebelum penutupan. Saat perpindahan di bawah radius diam, "
+            "koordinat diratakan supaya tidak bergetar. Di atas radius itu, "
+            "marker langsung mengikuti pengukuran baru. Alpha lebih kecil "
+            "berarti lebih halus. Matikan 'dari tepi kanan' jika benang masuk "
+            "dari kiri; yang dilacak tetap ujung bebasnya."
+        )
+        thread_note.setWordWrap(True)
+        thread_form.addRow(thread_note)
+        self.add_fields(thread_form, THREAD_HSV_FIELDS, sliders=True)
+        hsv_note = QLabel(
+            "HSV benang coklat/tembaga, terpisah dari mask lubang. "
+            "Mask dihitung dari gambar asli. H minimum > maksimum berarti "
+            "rentang melingkar. Gunakan tampilan Mask benang untuk menyetel. "
+            "Batas sisi masuk: komponen harus mencapai sisi tempat benang masuk."
+        )
+        hsv_note.setWordWrap(True)
+        thread_form.addRow(hsv_note)
+        self.add_fields(thread_form, THREAD_MEASURE_FIELDS)
+        smooth_note = QLabel(
+            "Radius sangat diam memakai perataan lebih kuat. "
+            "Radius itu harus lebih kecil atau sama dengan radius diam."
+        )
+        smooth_note.setWordWrap(True)
+        thread_form.addRow(smooth_note)
+        self.add_fields(thread_form, THREAD_SMOOTH_FIELDS)
 
         geometry_form = self.add_tab(tabs, "Kalibrasi")
         self.calibration_button = QPushButton("Bekukan untuk kalibrasi")
@@ -500,6 +547,7 @@ class CameraPane(QGroupBox):
             self.shown = None
             self.view.image = None
             self.view.update()
+            self._set_thread_readout("Ujung benang: —")
             self.pause_button.setChecked(False)
             self.active_source = source
             self.worker = CaptureWorker(
@@ -539,6 +587,7 @@ class CameraPane(QGroupBox):
         self.active_source = None
         self.stopping_since = None
         self.pause_button.setChecked(False)
+        self._set_thread_readout("Ujung benang: —")
         self.message.setText("Sumber dihentikan. Klik Mulai untuk membuka lagi.")
         self.update_controls()
 
@@ -596,13 +645,22 @@ class CameraPane(QGroupBox):
             out = cv2.cvtColor(packet["mask"], cv2.COLOR_GRAY2BGR)
         elif mode == 4:
             out = cv2.cvtColor(packet["gray"], cv2.COLOR_GRAY2BGR)
+        elif mode == 5:
+            thread_mask = packet.get("thread_mask")
+            if thread_mask is None:
+                thread_mask = np.zeros(packet["raw"].shape[:2], np.uint8)
+            out = cv2.cvtColor(thread_mask, cv2.COLOR_GRAY2BGR)
         else:
             out = packet["adjusted"]
 
+        enabled = bool(self.parameters().get("thread_on", True))
+        thread = packet.get("thread") if enabled else None
         if mode == 0:
             if self.parameters()["guides"]:
                 out = draw_guides(out, self.parameters())
             out = draw_detection(out, packet["result"])
+            out = draw_thread(out, thread, enabled=enabled)
+        self._show_thread_readout(thread, enabled)
 
         self.shown = out
         self.view.set_frame(out)
@@ -624,7 +682,29 @@ class CameraPane(QGroupBox):
             text += f" | X={cx:.2f}, Y={cy:.2f} px | match={result['score']:.3f}"
             if result["ecc"] is not None:
                 text += f" | ECC={result['ecc']:.3f}"
+        if enabled:
+            if thread:
+                tip_x, tip_y = thread["tip"]
+                text += f" | ujung {tip_x:.1f},{tip_y:.1f}"
+            else:
+                text += " | ujung tidak terdeteksi"
         self.stats.setText(text)
+
+    def _set_thread_readout(self, body):
+        self.thread_readout.setText(f'<span style="color:#7eecf0">{body}</span>')
+
+    def _show_thread_readout(self, thread, enabled):
+        if not enabled:
+            self._set_thread_readout("Ujung benang: deteksi mati")
+            return
+        if thread is None:
+            self._set_thread_readout("Ujung benang: tidak terdeteksi")
+            return
+        tip_x, tip_y = thread["tip"]
+        self._set_thread_readout(
+            f"Ujung benang: {tip_x:.1f}, {tip_y:.1f} px"
+            f" | tebal {thread['local_thickness']:.1f} px"
+        )
 
     def calibrate(self):
         if self.frozen is None:
@@ -865,7 +945,7 @@ def atomic_json_write(path, data):
 class MainWindow(QMainWindow):
     def __init__(self, top_file, side_file):
         super().__init__()
-        self.setWindowTitle("Pinhole Monitor | SIDE + TOP")
+        self.setWindowTitle("Pinhole + Ujung Benang | SIDE + TOP")
         self.setMinimumSize(1000, 700)
 
         central = QWidget()
@@ -873,7 +953,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
 
         toolbar = QHBoxLayout()
-        title = QLabel("PINHOLE MONITOR — SIDE / TOP")
+        title = QLabel("PINHOLE + UJUNG BENANG — SIDE / TOP")
         title.setStyleSheet("font-size: 18px; font-weight: 700;")
         toolbar.addWidget(title)
         toolbar.addStretch()
@@ -900,7 +980,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter)
 
         self.statusBar().showMessage(
-            "Kiri: samping. Kanan: atas. Koordinat dalam piksel, bukan metrologi."
+            "Kiri: samping. Kanan: atas. Oval lubang dan ujung benang coklat, "
+            "dalam piksel, bukan metrologi."
         )
 
         screen = QApplication.primaryScreen().availableGeometry()
@@ -937,7 +1018,7 @@ class MainWindow(QMainWindow):
             if not path.lower().endswith(".json"):
                 path += ".json"
             data = {
-                "version": 2,
+                "version": 3,
                 "panes": [pane.profile() for pane in self.panes],
             }
             atomic_json_write(path, data)
@@ -965,7 +1046,7 @@ class MainWindow(QMainWindow):
         try:
             data = json.loads(Path(path).read_text(encoding="utf-8"))
             panes_data = data.get("panes", [])
-            if data.get("version") not in (1, 2) or len(panes_data) != 2:
+            if data.get("version") not in (1, 2, 3) or len(panes_data) != 2:
                 raise ValueError("Format profil tidak didukung.")
 
             prepared = []

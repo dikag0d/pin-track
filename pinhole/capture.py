@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 
 from pinhole.params import validate_parameters
+from pinhole.thread_tip import BrownThreadTipTracker
 from pinhole.vision import prepare_image, tracker_for
 
 BACKENDS = [
@@ -194,6 +195,7 @@ class CaptureWorker(threading.Thread):
                 if self.initial_reference is not None
                 else None
             )
+            thread_tracker = BrownThreadTipTracker()
             raw = None
             index = -1
             failures = 0
@@ -249,6 +251,7 @@ class CaptureWorker(threading.Thread):
                 adjusted = raw
                 mask = np.zeros(raw.shape[:2], np.uint8)
                 gray = cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY)
+                note = ""
 
                 try:
                     validate_parameters(p, top=(self.role == "top"))
@@ -257,6 +260,18 @@ class CaptureWorker(threading.Thread):
                 except (ValueError, cv2.error, np.linalg.LinAlgError) as exc:
                     note = str(exc)
 
+                thread = None
+                thread_mask = np.zeros(raw.shape[:2], np.uint8)
+                try:
+                    if p.get("thread_on", True):
+                        thread, thread_mask = thread_tracker.detect(raw, p)
+                    else:
+                        thread_tracker.reset()
+                        thread_mask = thread_tracker.preview_mask(raw, p)
+                except (ValueError, cv2.error, np.linalg.LinAlgError) as exc:
+                    thread_note = f"Benang: {exc}"
+                    note = f"{note} | {thread_note}" if note else thread_note
+
                 elapsed_ms = (time.monotonic() - tick) * 1000
                 self.publish({
                     "raw": raw,
@@ -264,6 +279,8 @@ class CaptureWorker(threading.Thread):
                     "mask": mask,
                     "gray": gray,
                     "result": result,
+                    "thread": thread,
+                    "thread_mask": thread_mask,
                     "note": note,
                     "index": index,
                     "ms": elapsed_ms,
