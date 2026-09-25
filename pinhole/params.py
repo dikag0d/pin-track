@@ -105,6 +105,7 @@ DEFAULTS.update(
     thread_on=True,
     thread_from_right=True,
     thread_oval_lock=True,
+    path_overlay=True,
 )
 
 # Kalibrasi SIDE pada samples/side.webm, bukaan tabung ~t=15s.
@@ -151,6 +152,7 @@ def validate_parameters(p, top=True):
     for key in (
         "hsv_on", "invert", "ecc_on", "loop", "guides",
         "thread_on", "thread_from_right", "thread_oval_lock",
+        "path_overlay",
     ):
         if key in p and not isinstance(p[key], bool):
             raise ValueError(f"Parameter harus boolean: {key}")

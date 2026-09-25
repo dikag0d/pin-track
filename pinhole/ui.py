@@ -42,7 +42,9 @@ from pinhole.params import (
     defaults_for,
     validate_parameters,
 )
-from pinhole.thread_tip import draw_thread, draw_thread_guide
+from pinhole.thread_tip import (
+    draw_insertion_overlay, draw_thread, draw_thread_guide, insertion_paths,
+)
 from pinhole.vision import draw_detection, draw_guides, prepare_image, tracker_for
 
 RESOLUTIONS = ("640x480", "800x600", "1280x720", "1920x1080")
@@ -296,6 +298,11 @@ class CameraPane(QGroupBox):
 
         thread_form = self.add_tab(tabs, "Benang")
         self.add_check(thread_form, "thread_on", "Aktifkan deteksi ujung benang")
+        self.add_check(
+            thread_form,
+            "path_overlay",
+            "Jalur insertion: benang di dalam bukaan jarum",
+        )
         self.add_check(
             thread_form, "thread_from_right", "Benang masuk dari tepi kanan"
         )
@@ -683,7 +690,21 @@ class CameraPane(QGroupBox):
                 out = draw_guides(out, self.parameters())
             out = draw_detection(out, packet["result"])
             out = draw_thread(out, thread, enabled=enabled)
-        self._show_thread_readout(thread, enabled)
+            if self.parameters().get("path_overlay", True):
+                out = draw_insertion_overlay(
+                    out,
+                    packet["result"],
+                    thread,
+                    from_right=bool(self.parameters().get("thread_from_right", True)),
+                )
+        aligned = None
+        if enabled and self.parameters().get("path_overlay", True):
+            aligned = insertion_paths(
+                packet["result"],
+                thread,
+                from_right=bool(self.parameters().get("thread_from_right", True)),
+            )["aligned"]
+        self._show_thread_readout(thread, enabled, aligned)
 
         self.shown = out
         self.view.set_frame(out)
@@ -716,7 +737,7 @@ class CameraPane(QGroupBox):
     def _set_thread_readout(self, body):
         self.thread_readout.setText(f'<span style="color:#7eecf0">{body}</span>')
 
-    def _show_thread_readout(self, thread, enabled):
+    def _show_thread_readout(self, thread, enabled, aligned=None):
         if not enabled:
             self._set_thread_readout("Ujung benang: deteksi mati")
             return
@@ -731,8 +752,14 @@ class CameraPane(QGroupBox):
             oval_txt = f" | oval kunci {along:.1f}×{across:.1f}"
         else:
             oval_txt = f" | tebal {thread['local_thickness']:.1f} px"
+        if aligned is True:
+            align_txt = " | jalur selaras"
+        elif aligned is False:
+            align_txt = " | benang melewati jarum"
+        else:
+            align_txt = ""
         self._set_thread_readout(
-            f"Ujung benang: {tip_x:.1f}, {tip_y:.1f} px{width_txt}{oval_txt}"
+            f"Ujung benang: {tip_x:.1f}, {tip_y:.1f} px{width_txt}{oval_txt}{align_txt}"
         )
 
     def calibrate(self):

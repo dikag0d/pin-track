@@ -52,6 +52,8 @@ Default menganggap benang masuk dari tepi kanan. Untuk kamera yang benangnya mas
 
 Oval ujung dikunci ke lebar kalibrasi karena lebar benang tidak berubah. Posisi oval tetap mengikuti ujung. Sesuaikan dengan drag **Oval ujung benang** di tab Kalibrasi, atau tombol **Kunci oval ke lebar benang**. Angka oval memakai referensi 640×480, sama seperti oval lubang.
 
+Pada overlay, garis putus-putus hijau adalah bukaan jalur jarum. Garis putus-putus kuning adalah jalur benang, dan lingkaran kuning menandai ujung. Garis tegak hijau ada di sisi lubang yang menghadap benang. Insertion siap bila jalur kuning berada di dalam jalur hijau (`JALUR SELARAS`). Jika kuning keluar dari hijau, ujung menabrak dinding lubang (`BENANG MELEWATI JARUM`). Centang di tab Benang bisa mematikan garis ini.
+
 Jika `top.webm` belum ada, isi path di panel kanan atau biarkan kosong sampai ada sumber.
 
 ## Batch SIDE
