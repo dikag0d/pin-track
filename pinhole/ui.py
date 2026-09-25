@@ -21,7 +21,7 @@ from PySide6.QtCore import Qt, QTimer, QRectF, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
-    QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
+    QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton,
     QScrollArea, QSizePolicy, QSlider, QSplitter,
     QTabWidget, QVBoxLayout, QWidget,
@@ -38,6 +38,8 @@ from pinhole.params import (
     THREAD_MEASURE_FIELDS,
     THREAD_OVAL_FIELDS,
     THREAD_SMOOTH_FIELDS,
+    VIDEO_RES_FIELDS,
+    ZOOM_FIELDS,
     TRACK_FIELDS,
     defaults_for,
     validate_parameters,
@@ -55,11 +57,28 @@ class VideoView(QWidget):
         super().__init__()
         self.image = None
         self.image_rect = QRectF()
-        self.selecting = False
-        self.drag_start = None
-        self.drag_end = None
-        self.setMinimumSize(320, 220)
+        self.setMinimumSize(640, 480)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        # Zoom patch
+        self.zoom_level = 1.0
+        self.pan_x = 0.0
+        self.pan_y = 0.0
+        self.is_resizing = False
+
+    def zoom_in(self):
+        self.zoom_level = min(self.zoom_level * 1.1, 50.0)
+        self.update()
+
+    def zoom_out(self):
+        self.zoom_level = max(self.zoom_level / 1.1, 0.1)
+        self.update()
+
+    def reset_zoom(self):
+        self.zoom_level = 1.0
+        self.pan_x = 0.0
+        self.pan_y = 0.0
+        self.update()
 
     def set_frame(self, frame):
         frame = np.ascontiguousarray(frame)
@@ -255,26 +274,37 @@ class CameraPane(QGroupBox):
         self.view.selected.connect(self.select_region)
         layout.addWidget(self.view, 1)
 
+        status_box = QFrame()
+        status_box.setObjectName("statusBox")
+        status_layout = QVBoxLayout(status_box)
+        status_layout.setContentsMargins(10, 8, 10, 8)
+        status_layout.setSpacing(4)
+
         self.stats = QLabel("Belum ada frame.")
+        self.stats.setObjectName("statsLabel")
         self.stats.setWordWrap(True)
-        layout.addWidget(self.stats)
+        status_layout.addWidget(self.stats)
 
         self.thread_readout = QLabel()
+        self.thread_readout.setObjectName("threadReadout")
         self.thread_readout.setWordWrap(True)
         self.thread_readout.setTextFormat(Qt.TextFormat.RichText)
         self._set_thread_readout("Ujung benang: —")
-        layout.addWidget(self.thread_readout)
+        status_layout.addWidget(self.thread_readout)
 
         self.message = QLabel(
             "Preset awal untuk top.webm. Kalibrasi ulang untuk kamera/video lain."
             if self.top else
             "Preset SIDE untuk samples/side.webm. Kalibrasi ulang jika kamera berubah."
         )
+        self.message.setObjectName("statusMessage")
         self.message.setWordWrap(True)
-        layout.addWidget(self.message)
+        status_layout.addWidget(self.message)
+
+        layout.addWidget(status_box)
 
         tabs = QTabWidget()
-        tabs.setMinimumHeight(230)
+        tabs.setMinimumHeight(240)
         layout.addWidget(tabs)
 
         image_form = self.add_tab(tabs, "Citra")
@@ -714,7 +744,7 @@ class CameraPane(QGroupBox):
         self.stats.setText(text)
 
     def _set_thread_readout(self, body):
-        self.thread_readout.setText(f'<span style="color:#7eecf0">{body}</span>')
+        self.thread_readout.setText(f'<span style="color:#50d0cb; font-weight:600;">{body}</span>')
 
     def _show_thread_readout(self, thread, enabled):
         if not enabled:
@@ -1058,7 +1088,11 @@ class MainWindow(QMainWindow):
             CameraPane("TOP — pelacak oval", "top", self, top_file),
         ]
         for pane in self.panes:
-            splitter.addWidget(pane)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(pane)
+            scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+            splitter.addWidget(scroll)
         splitter.setSizes([700, 700])
         layout.addWidget(splitter)
 
@@ -1212,6 +1246,25 @@ QWidget {
     background: #142132;
     color: #e6edf5;
     font-size: 12px;
+}
+QLabel {
+    padding: 1px 0px;
+}
+QFrame#statusBox {
+    background: #09131f;
+    border: 1px solid #23374c;
+    border-radius: 6px;
+    margin-top: 4px;
+    margin-bottom: 4px;
+}
+QLabel#statsLabel {
+    color: #e6edf5;
+}
+QLabel#threadReadout {
+    color: #50d0cb;
+}
+QLabel#statusMessage {
+    color: #9bb0c7;
 }
 QGroupBox {
     border: 1px solid #364960;
