@@ -73,6 +73,19 @@ THREAD_OVAL_FIELDS = [
     ("thread_oval_cy", "Pratinjau oval Y", 0.0, 480.0, 230.0, 0.5),
 ]
 
+# Kamera/Sumber: resolusi direkomendasikan (Otomatis/native lancar; dan util per frame untuk patch)
+VIDEO_RES_FIELDS = [
+    ("video_res_x", "Ukuran Sumber X (fx)", 0.0, 9999.0, 0.0, 10.0),
+    ("video_res_y", "Ukuran Sumber Y (fy)", 0.0, 9999.0, 0.0, 10.0),
+]
+
+# Zoom overlay patch (floating, kecil), patch per tampilan: mask/n/blur latar
+ZOOM_FIELDS = [
+    ("video_patch_width", "Patch lebar (px)", 0, 1920, 80, 10),
+    ("video_patch_height", "Patch tinggi (px)", 0, 1080, 60, 10),
+    ("video_zoom_factor", "Faktor zoom [1..50]", 0.1, 50.0, 1.0, 0.1),
+]
+
 GEOMETRY_FIELDS = [
     ("cx", "Pusat oval X", 0.0, 640.0, 175.5, 0.5),
     ("cy", "Pusat oval Y", 0.0, 480.0, 222.5, 0.5),
@@ -91,6 +104,7 @@ GEOMETRY_FIELDS = [
 
 ALL_FIELDS = (
     IMAGE_FIELDS + HSV_FIELDS + TRACK_FIELDS + GEOMETRY_FIELDS
+    + VIDEO_RES_FIELDS + ZOOM_FIELDS
     + THREAD_HSV_FIELDS + THREAD_MEASURE_FIELDS + THREAD_SMOOTH_FIELDS
     + THREAD_OVAL_FIELDS
 )
@@ -105,7 +119,11 @@ DEFAULTS.update(
     thread_on=True,
     thread_from_right=True,
     thread_oval_lock=True,
-    path_overlay=True,
+    video_res_x=0.0,
+    video_res_y=0.0,
+    video_patch_width=0,
+    video_patch_height=0,
+    video_zoom_factor=1.0,
 )
 
 # Kalibrasi SIDE pada samples/side.webm, bukaan tabung ~t=15s.
