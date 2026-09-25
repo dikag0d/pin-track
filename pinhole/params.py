@@ -119,6 +119,7 @@ DEFAULTS.update(
     thread_on=True,
     thread_from_right=True,
     thread_oval_lock=True,
+    path_overlay=True,
     video_res_x=0.0,
     video_res_y=0.0,
     video_patch_width=0,
