@@ -16,7 +16,11 @@ import numpy as np
 
 from pinhole.capture import CaptureWorker
 from pinhole.params import defaults_for, validate_parameters
-from pinhole.thread_tip import BrownThreadTipTracker
+from pinhole.thread_tip import (
+    BrownThreadTipTracker,
+    draw_insertion_overlay,
+    insertion_paths,
+)
 
 
 def copper_bgr():
@@ -246,6 +250,68 @@ class ThreadTipTest(unittest.TestCase):
         np.testing.assert_array_equal(raw_thick, thick)
 
 
+def _pinhole(center=(200.0, 220.0), axes=(40.0, 80.0)):
+    return {
+        "ellipse": (center, axes, 0.0),
+        "center": center,
+        "score": 0.9,
+        "ecc": None,
+        "refined": False,
+    }
+
+
+def _thread(tip=(420.0, 220.0), across=20.0):
+    return {
+        "tip": tip,
+        "tip_ellipse": (tip, (12.0, across), 0.0),
+        "local_thickness": across,
+        "body_thickness": across,
+        "angle": 0.0,
+        "oval_locked": True,
+    }
+
+
+class InsertionPathTest(unittest.TestCase):
+    def test_thread_inside_needle_is_aligned(self):
+        paths = insertion_paths(_pinhole(), _thread(), from_right=True)
+        self.assertEqual(paths["needle"]["y0"], 180.0)
+        self.assertEqual(paths["needle"]["y1"], 260.0)
+        self.assertEqual(paths["needle"]["gate_x"], 220.0)
+        self.assertAlmostEqual(paths["thread"]["y0"], 210.0)
+        self.assertAlmostEqual(paths["thread"]["y1"], 230.0)
+        self.assertTrue(paths["aligned"])
+
+    def test_thread_outside_needle_crosses_the_opening(self):
+        paths = insertion_paths(
+            _pinhole(), _thread(tip=(420.0, 170.0), across=20.0), from_right=True
+        )
+        self.assertFalse(paths["aligned"])
+
+    def test_gate_faces_the_thread_entry_side(self):
+        right = insertion_paths(_pinhole(), _thread(), from_right=True)
+        left = insertion_paths(_pinhole(), _thread(), from_right=False)
+        self.assertEqual(right["needle"]["gate_x"], 220.0)
+        self.assertEqual(left["needle"]["gate_x"], 180.0)
+
+    def test_overlay_draws_both_corridors_and_status(self):
+        blank = np.full((480, 640, 3), 30, np.uint8)
+        aligned = draw_insertion_overlay(blank, _pinhole(), _thread(), True)
+        self.assertGreater(int(np.count_nonzero(aligned[180, :, 1] > 200)), 8)
+        self.assertGreater(int(np.count_nonzero(aligned[:, 220, 1] > 200)), 4)
+        yellow = aligned[210]
+        self.assertGreater(
+            int(np.count_nonzero((yellow[:, 1] > 200) & (yellow[:, 2] > 200))), 8
+        )
+        self.assertEqual(tuple(int(v) for v in aligned[220, 420]), (30, 30, 30))
+
+        outside = draw_insertion_overlay(
+            blank, _pinhole(), _thread(tip=(420.0, 150.0)), True
+        )
+        # Label status sits under the coordinate text.
+        self.assertGreater(int(outside[70:90, 10:280, 2].max()), 150)
+        self.assertGreater(int(aligned[70:90, 10:200, 1].max()), 150)
+
+
 class ThreadGuiTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -279,6 +345,7 @@ class ThreadGuiTest(unittest.TestCase):
             self.assertTrue(pane.checks["thread_on"].isChecked())
             self.assertTrue(pane.checks["thread_from_right"].isChecked())
             self.assertTrue(pane.checks["thread_oval_lock"].isChecked())
+            self.assertTrue(pane.checks["path_overlay"].isChecked())
 
         side.checks["thread_on"].setChecked(False)
         self.assertFalse(side.parameters()["thread_on"])

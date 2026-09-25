@@ -16,6 +16,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from pinhole.vision import ellipse_points
+
 # Morfologi tetap: opening membuang bintik, closing hanya untuk komponen.
 # Titik ukur memakai mask opened, bukan closed.
 OPEN_KERNEL = np.ones((2, 2), np.uint8)
@@ -393,6 +395,135 @@ def draw_thread_guide(frame, p):
         )
     except cv2.error:
         pass
+    return out
+
+
+# Garis putus-putus jalur insertion. Hijau = bukaan jarum, kuning = benang.
+PATH_DASH = 14
+PATH_GAP = 8
+PATH_ALIGN_TOLERANCE = 0.75
+NEEDLE_COLOR = (0, 255, 0)
+THREAD_PATH_COLOR = (0, 255, 255)
+
+
+def _span(points):
+    return (
+        float(points[:, 0].min()),
+        float(points[:, 1].min()),
+        float(points[:, 0].max()),
+        float(points[:, 1].max()),
+    )
+
+
+def insertion_paths(pinhole, thread, from_right=True):
+    """Koridor vertikal jalur jarum dan jalur benang.
+
+    Jalur benang selaras bila seluruh tebalnya berada di dalam bukaan
+    jarum. Di luar itu ujung akan menabrak dinding lubang.
+    """
+    paths = {"needle": None, "thread": None, "aligned": None}
+    if pinhole is not None and pinhole.get("ellipse") is not None:
+        x_min, y_min, x_max, y_max = _span(ellipse_points(pinhole["ellipse"]))
+        paths["needle"] = {
+            "y0": y_min,
+            "y1": y_max,
+            "gate_x": x_max if from_right else x_min,
+        }
+    if thread is not None and thread.get("tip_ellipse") is not None:
+        tip_x, tip_y = thread["tip"]
+        _x0, y_min, _x1, y_max = _span(ellipse_points(thread["tip_ellipse"]))
+        half = max((y_max - y_min) / 2.0, 1.0)
+        paths["thread"] = {
+            "y0": float(tip_y) - half,
+            "y1": float(tip_y) + half,
+            "tip": (float(tip_x), float(tip_y)),
+            "radius": half,
+        }
+    needle = paths["needle"]
+    band = paths["thread"]
+    if needle is not None and band is not None:
+        tol = PATH_ALIGN_TOLERANCE
+        paths["aligned"] = (
+            band["y0"] >= needle["y0"] - tol
+            and band["y1"] <= needle["y1"] + tol
+        )
+    return paths
+
+
+def _dashed_segment(image, start, end, color):
+    start = np.array(start, np.float64)
+    end = np.array(end, np.float64)
+    delta = end - start
+    length = float(np.hypot(delta[0], delta[1]))
+    if length < 1.0:
+        return
+    direction = delta / length
+    pos = 0.0
+    while pos < length:
+        stop = min(pos + PATH_DASH, length)
+        a = start + direction * pos
+        b = start + direction * stop
+        cv2.line(
+            image,
+            (int(round(a[0])), int(round(a[1]))),
+            (int(round(b[0])), int(round(b[1]))),
+            color,
+            2,
+            cv2.LINE_8,
+        )
+        pos += PATH_DASH + PATH_GAP
+
+
+def _hline(image, y, color):
+    height, width = image.shape[:2]
+    yy = int(round(y))
+    if 0 <= yy < height:
+        _dashed_segment(image, (0, yy), (width - 1, yy), color)
+
+
+def draw_insertion_overlay(frame, pinhole, thread, from_right=True):
+    """Garis putus-putus jalur jarum (hijau) dan jalur benang (kuning).
+
+    Garis tegak hijau adalah sisi lubang yang menghadap benang.
+    Lingkaran kuning menandai ujung, dengan diameter sama dengan tebal jalur.
+    """
+    out = frame.copy()
+    height, width = out.shape[:2]
+    paths = insertion_paths(pinhole, thread, from_right=from_right)
+    needle = paths["needle"]
+    band = paths["thread"]
+    if needle is not None:
+        _hline(out, needle["y0"], NEEDLE_COLOR)
+        _hline(out, needle["y1"], NEEDLE_COLOR)
+        gate = int(round(needle["gate_x"]))
+        if 0 <= gate < width:
+            _dashed_segment(
+                out,
+                (gate, needle["y0"]),
+                (gate, needle["y1"]),
+                NEEDLE_COLOR,
+            )
+    if band is not None:
+        _hline(out, band["y0"], THREAD_PATH_COLOR)
+        _hline(out, band["y1"], THREAD_PATH_COLOR)
+        tip_x, tip_y = band["tip"]
+        tip = (int(round(tip_x)), int(round(tip_y)))
+        radius = max(4, int(round(band["radius"])))
+        if 0 <= tip[0] < width and 0 <= tip[1] < height:
+            cv2.circle(out, tip, radius, THREAD_PATH_COLOR, 2, cv2.LINE_8)
+
+    aligned = paths["aligned"]
+    if aligned is True:
+        label, color = "JALUR SELARAS", NEEDLE_COLOR
+    elif aligned is False:
+        label, color = "BENANG MELEWATI JARUM", (0, 80, 255)
+    else:
+        label = None
+    if label is not None:
+        cv2.putText(
+            out, label, (16, 76), cv2.FONT_HERSHEY_SIMPLEX,
+            0.6, color, 1, cv2.LINE_AA,
+        )
     return out
 
 
