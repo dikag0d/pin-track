@@ -19,6 +19,8 @@ from pinhole.params import defaults_for, validate_parameters
 from pinhole.thread_tip import (
     BrownThreadTipTracker,
     draw_insertion_overlay,
+    draw_thread,
+    format_tip_xy,
     insertion_paths,
 )
 
@@ -303,6 +305,8 @@ class InsertionPathTest(unittest.TestCase):
             int(np.count_nonzero((yellow[:, 1] > 200) & (yellow[:, 2] > 200))), 8
         )
         self.assertEqual(tuple(int(v) for v in aligned[220, 420]), (30, 30, 30))
+        # Lingkaran ujung tidak digambar di overlay jalur.
+        self.assertEqual(tuple(int(v) for v in aligned[220, 410]), (30, 30, 30))
 
         outside = draw_insertion_overlay(
             blank, _pinhole(), _thread(tip=(420.0, 150.0)), True
@@ -310,6 +314,23 @@ class InsertionPathTest(unittest.TestCase):
         # Label status sits under the coordinate text.
         self.assertGreater(int(outside[70:90, 10:280, 2].max()), 150)
         self.assertGreater(int(aligned[70:90, 10:200, 1].max()), 150)
+
+    def test_marker_is_one_circle_and_xy_has_no_comma(self):
+        thread = _thread(tip=(420.4, 220.6), across=20.0)
+        self.assertEqual(format_tip_xy(*thread["tip"]), "X 420 Y 221")
+        self.assertNotIn(",", format_tip_xy(*thread["tip"]))
+        blank = np.full((480, 640, 3), 30, np.uint8)
+        out = draw_thread(blank, thread)
+        yellow = (
+            (out[:, :, 1] > 200) & (out[:, :, 2] > 200) & (out[:, :, 0] < 80)
+        )
+        yellow[:80, :] = False
+        self.assertTrue(bool(yellow[220, 410]))
+        self.assertFalse(bool(yellow[220, 414]))
+        ys, xs = np.where(yellow)
+        radius = np.hypot(xs - 420.4, ys - 220.6)
+        self.assertGreater(float(np.median(radius)), 8.0)
+        self.assertLess(float(np.median(radius)), 12.0)
 
 
 class ThreadGuiTest(unittest.TestCase):
@@ -391,10 +412,11 @@ class ThreadGuiTest(unittest.TestCase):
         self.assertTrue(np.any(shown != hidden))
         x, y = (int(round(v)) for v in thread["tip"])
         np.testing.assert_array_equal(shown[y, x], (0, 0, 255))
+        xy = format_tip_xy(*thread["tip"])
         text = pane.thread_readout.text()
-        self.assertIn(f"{thread['tip'][0]:.1f}", text)
-        self.assertIn(f"{thread['tip'][1]:.1f}", text)
-        self.assertIn("ujung", pane.stats.text())
+        self.assertIn(xy, text)
+        self.assertNotIn(",", xy)
+        self.assertIn(f"ujung {xy}", pane.stats.text())
         self.assertIn("oval kunci", pane.thread_readout.text())
 
         roi = shown[20:60, 8:320]
@@ -405,7 +427,7 @@ class ThreadGuiTest(unittest.TestCase):
         pane.view_mode.setCurrentIndex(pane.view_mode.findText("Mask benang"))
         pane.render()
         self.assertGreater(int(pane.shown.max()), 200)
-        self.assertIn(f"{thread['tip'][0]:.1f}", pane.thread_readout.text())
+        self.assertIn(format_tip_xy(*thread["tip"]), pane.thread_readout.text())
         pane.view_mode.setCurrentIndex(0)
 
         original = pane.parameters()
