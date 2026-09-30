@@ -45,7 +45,8 @@ from pinhole.params import (
     validate_parameters,
 )
 from pinhole.thread_tip import (
-    draw_insertion_overlay, draw_thread, draw_thread_guide, insertion_paths,
+    draw_insertion_overlay, draw_thread, draw_thread_guide, format_tip_xy,
+    insertion_paths,
 )
 from pinhole.vision import draw_detection, draw_guides, prepare_image, tracker_for
 
@@ -759,7 +760,7 @@ class CameraPane(QGroupBox):
         if enabled:
             if thread:
                 tip_x, tip_y = thread["tip"]
-                text += f" | ujung {tip_x:.1f},{tip_y:.1f}"
+                text += f" | ujung {format_tip_xy(tip_x, tip_y)}"
             else:
                 text += " | ujung tidak terdeteksi"
         self.stats.setText(text)
@@ -789,7 +790,7 @@ class CameraPane(QGroupBox):
         else:
             align_txt = ""
         self._set_thread_readout(
-            f"Ujung benang: {tip_x:.1f}, {tip_y:.1f} px{width_txt}{oval_txt}{align_txt}"
+            f"Ujung benang: {format_tip_xy(tip_x, tip_y)} px{width_txt}{oval_txt}{align_txt}"
         )
 
     def calibrate(self):

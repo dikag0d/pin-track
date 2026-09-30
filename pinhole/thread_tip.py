@@ -481,11 +481,29 @@ def _hline(image, y, color):
         _dashed_segment(image, (0, yy), (width - 1, yy), color)
 
 
+def format_tip_xy(tip_x, tip_y) -> str:
+    """Koordinat ujung sebagai bilangan bulat, tanpa koma."""
+    return f"X {int(round(float(tip_x)))} Y {int(round(float(tip_y)))}"
+
+
+def tip_marker_radius(thread) -> int:
+    """Jari-jari satu lingkaran ujung, mengikuti tebal jalur benang."""
+    ellipse = thread.get("tip_ellipse")
+    if ellipse is not None:
+        try:
+            _x0, y0, _x1, y1 = _span(ellipse_points(ellipse))
+            return max(4, int(round((y1 - y0) / 2.0)))
+        except (TypeError, ValueError, cv2.error):
+            pass
+    thickness = thread.get("body_thickness") or thread.get("local_thickness") or 8
+    return max(4, int(round(float(thickness) / 2.0)))
+
+
 def draw_insertion_overlay(frame, pinhole, thread, from_right=True):
     """Garis putus-putus jalur jarum (hijau) dan jalur benang (kuning).
 
     Garis tegak hijau adalah sisi lubang yang menghadap benang.
-    Lingkaran kuning menandai ujung, dengan diameter sama dengan tebal jalur.
+    Ujung sendiri digambar sekali sebagai lingkaran di draw_thread.
     """
     out = frame.copy()
     height, width = out.shape[:2]
@@ -506,11 +524,6 @@ def draw_insertion_overlay(frame, pinhole, thread, from_right=True):
     if band is not None:
         _hline(out, band["y0"], THREAD_PATH_COLOR)
         _hline(out, band["y1"], THREAD_PATH_COLOR)
-        tip_x, tip_y = band["tip"]
-        tip = (int(round(tip_x)), int(round(tip_y)))
-        radius = max(4, int(round(band["radius"])))
-        if 0 <= tip[0] < width and 0 <= tip[1] < height:
-            cv2.circle(out, tip, radius, THREAD_PATH_COLOR, 2, cv2.LINE_8)
 
     aligned = paths["aligned"]
     if aligned is True:
@@ -528,24 +541,22 @@ def draw_insertion_overlay(frame, pinhole, thread, from_right=True):
 
 
 def draw_thread(frame, thread, enabled=True):
-    """Gambar elips ujung, silang, dan koordinat subpiksel."""
+    """Gambar satu lingkaran ujung, silang, dan koordinat bilangan bulat."""
     if not enabled:
         return frame
     out = frame.copy()
     if thread is not None:
         tip_x, tip_y = thread["tip"]
         tip = (int(round(tip_x)), int(round(tip_y)))
-        try:
-            cv2.ellipse(
-                out, thread["tip_ellipse"], (0, 255, 255), 2, cv2.LINE_AA
-            )
-        except cv2.error:
-            pass
+        radius = tip_marker_radius(thread)
+        if 0 <= tip[0] < out.shape[1] and 0 <= tip[1] < out.shape[0]:
+            cv2.circle(out, tip, radius, THREAD_PATH_COLOR, 2, cv2.LINE_AA)
         cv2.drawMarker(
             out, tip, (0, 0, 255), cv2.MARKER_CROSS, 16, 1, cv2.LINE_AA
         )
-        cv2.circle(out, tip, 2, (0, 0, 255), -1, cv2.LINE_AA)
-        text = f"UJUNG BENANG {tip_x:.1f},{tip_y:.1f}"
+        if 0 <= tip[1] < out.shape[0] and 0 <= tip[0] < out.shape[1]:
+            out[tip[1], tip[0]] = (0, 0, 255)
+        text = f"UJUNG BENANG {format_tip_xy(tip_x, tip_y)}"
     else:
         text = "UJUNG BENANG: tidak terdeteksi"
     cv2.putText(
