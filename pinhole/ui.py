@@ -43,7 +43,7 @@ from pinhole.params import (
     ZOOM_FIELDS,
     TRACK_FIELDS,
     defaults_for,
-    format_xy,
+    format_measure,
     length_mm,
     validate_parameters,
 )
@@ -332,9 +332,9 @@ class CameraPane(QGroupBox):
         self.add_fields(tracking_form, SCALE_FIELDS)
         scale_note = QLabel(
             "Kotak checkerboard 1 mm pada gambar 640×480. "
-            "Isi piksel mendatar dan menurun untuk satu kotak. "
-            "0 menampilkan koordinat dalam piksel. "
-            "TOP bawaan: X 61.5 dan Y 63.9."
+            "TOP memakai X dan Y. SIDE hanya Z dari piksel tegak. "
+            "0 menampilkan piksel. "
+            "TOP bawaan: X 61.5, Y 63.9. SIDE bawaan: Z 60.7."
         )
         scale_note.setWordWrap(True)
         tracking_form.addRow(scale_note)
@@ -730,15 +730,17 @@ class CameraPane(QGroupBox):
         thread = packet.get("thread") if enabled else None
         px_per_mm_x = float(params.get("px_per_mm_x", 0.0))
         px_per_mm_y = float(params.get("px_per_mm_y", 0.0))
+        px_per_mm_z = float(params.get("px_per_mm_z", 0.0))
         if mode == 0:
             if params["guides"]:
                 out = draw_guides(out, params)
             out = draw_detection(
-                out, packet["result"], px_per_mm_x, px_per_mm_y,
+                out, packet["result"], px_per_mm_x, px_per_mm_y, px_per_mm_z,
             )
             out = draw_thread(
                 out, thread, enabled=enabled,
                 px_per_mm_x=px_per_mm_x, px_per_mm_y=px_per_mm_y,
+                px_per_mm_z=px_per_mm_z,
             )
             if params.get("path_overlay", True):
                 out = draw_insertion_overlay(
@@ -774,8 +776,11 @@ class CameraPane(QGroupBox):
         if result:
             cx, cy = result["center"]
             text += (
-                f" | lubang {format_xy(cx, cy, px_per_mm_x, px_per_mm_y, width, height)}"
-                f" | match={result['score']:.3f}"
+                " | lubang "
+                + format_measure(
+                    cx, cy, px_per_mm_x, px_per_mm_y, width, height, px_per_mm_z,
+                )
+                + f" | match={result['score']:.3f}"
             )
             if result["ecc"] is not None:
                 text += f" | ECC={result['ecc']:.3f}"
@@ -786,6 +791,7 @@ class CameraPane(QGroupBox):
                     " | ujung "
                     + format_tip_xy(
                         tip_x, tip_y, px_per_mm_x, px_per_mm_y, width, height,
+                        px_per_mm_z,
                     )
                 )
             else:
@@ -806,8 +812,10 @@ class CameraPane(QGroupBox):
         frame_h, frame_w = self._frame_size()
         px_per_mm_x = float(self.parameters().get("px_per_mm_x", 0.0))
         px_per_mm_y = float(self.parameters().get("px_per_mm_y", 0.0))
+        px_per_mm_z = float(self.parameters().get("px_per_mm_z", 0.0))
+        vertical_scale = px_per_mm_z if px_per_mm_z > 0 else px_per_mm_y
         body = thread.get("body_thickness")
-        body_mm = length_mm(body, px_per_mm_y, frame_h, 480) if body else None
+        body_mm = length_mm(body, vertical_scale, frame_h, 480) if body else None
         if body_mm is not None:
             width_txt = f" | lebar {body_mm:.2f} mm"
         elif body:
@@ -817,14 +825,16 @@ class CameraPane(QGroupBox):
         if thread.get("oval_locked"):
             along, across = thread["tip_ellipse"][1]
             along_mm = length_mm(along, px_per_mm_x, frame_w, 640)
-            across_mm = length_mm(across, px_per_mm_y, frame_h, 480)
-            if along_mm is not None and across_mm is not None:
+            across_mm = length_mm(across, vertical_scale, frame_h, 480)
+            if px_per_mm_z > 0 and across_mm is not None:
+                oval_txt = f" | oval kunci {across_mm:.2f} mm"
+            elif along_mm is not None and across_mm is not None:
                 oval_txt = f" | oval kunci {along_mm:.2f}×{across_mm:.2f} mm"
             else:
                 oval_txt = f" | oval kunci {along:.1f}×{across:.1f}"
         else:
             thick = thread["local_thickness"]
-            thick_mm = length_mm(thick, px_per_mm_y, frame_h, 480)
+            thick_mm = length_mm(thick, vertical_scale, frame_h, 480)
             if thick_mm is not None:
                 oval_txt = f" | tebal {thick_mm:.2f} mm"
             else:
@@ -839,6 +849,7 @@ class CameraPane(QGroupBox):
             "Ujung benang: "
             + format_tip_xy(
                 tip_x, tip_y, px_per_mm_x, px_per_mm_y, frame_w, frame_h,
+                px_per_mm_z,
             )
             + f"{width_txt}{oval_txt}{align_txt}"
         )

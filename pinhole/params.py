@@ -65,14 +65,18 @@ THREAD_SMOOTH_FIELDS = [
 ]
 
 # Piksel per 1 mm pada referensi 640 x 480. 0 = tampilkan piksel.
-# TOP diukur dari checkerboard kotak 1 mm: 61.5 px mendatar, 63.9 px menurun.
+# TOP: checkerboard 1 mm, 61.5 px mendatar dan 63.9 px menurun.
+# SIDE: hanya sumbu tegak sebagai Z. Foto 489 px tinggi, kotak tegak 61.8 px,
+# disetarakan ke tinggi 480 menjadi 60.7 px per mm.
 SCALE_FIELDS = [
     ("px_per_mm_x", "Piksel per mm X", 0.0, 500.0, 0.0, 0.1),
     ("px_per_mm_y", "Piksel per mm Y", 0.0, 500.0, 0.0, 0.1),
+    ("px_per_mm_z", "Piksel per mm Z", 0.0, 500.0, 0.0, 0.1),
 ]
 
 TOP_PX_PER_MM_X = 61.5
 TOP_PX_PER_MM_Y = 63.9
+SIDE_PX_PER_MM_Z = 60.7
 
 # Oval ujung pada referensi 640 x 480. Lebar dikunci karena benang tidak berubah.
 THREAD_OVAL_FIELDS = [
@@ -166,6 +170,11 @@ def defaults_for(role: str) -> dict:
     if role == "top":
         values["px_per_mm_x"] = TOP_PX_PER_MM_X
         values["px_per_mm_y"] = TOP_PX_PER_MM_Y
+        values["px_per_mm_z"] = 0.0
+    elif role == "side":
+        values["px_per_mm_x"] = 0.0
+        values["px_per_mm_y"] = 0.0
+        values["px_per_mm_z"] = SIDE_PX_PER_MM_Z
     return values
 
 
@@ -185,6 +194,25 @@ def format_xy(x, y, px_per_mm_x=0.0, px_per_mm_y=0.0, frame_w=640, frame_h=480) 
         mm_y = float(y) * 480.0 / float(frame_h) / float(px_per_mm_y)
         return f"X {mm_x:.2f} Y {mm_y:.2f} mm"
     return f"X {int(round(float(x)))} Y {int(round(float(y)))}"
+
+
+def format_z(y, px_per_mm_z, frame_h=480) -> str | None:
+    """Koordinat Z dari piksel tegak. None bila skala Z belum diisi."""
+    if px_per_mm_z <= 0 or frame_h <= 0:
+        return None
+    mm_z = float(y) * 480.0 / float(frame_h) / float(px_per_mm_z)
+    return f"Z {mm_z:.2f} mm"
+
+
+def format_measure(
+    x, y, px_per_mm_x=0.0, px_per_mm_y=0.0, frame_w=640, frame_h=480,
+    px_per_mm_z=0.0,
+) -> str:
+    """SIDE memakai Z saja. TOP memakai X dan Y. Tanpa skala, tetap piksel."""
+    z_text = format_z(y, px_per_mm_z, frame_h)
+    if z_text is not None:
+        return z_text
+    return format_xy(x, y, px_per_mm_x, px_per_mm_y, frame_w, frame_h)
 
 
 def length_mm(px, px_per_mm, frame_span, ref_span) -> float | None:

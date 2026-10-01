@@ -329,17 +329,19 @@ def draw_guides(frame, p):
     return out
 
 
-def draw_detection(frame, result, px_per_mm_x=0.0, px_per_mm_y=0.0):
-    from pinhole.params import format_xy
+def draw_detection(
+    frame, result, px_per_mm_x=0.0, px_per_mm_y=0.0, px_per_mm_z=0.0,
+):
+    from pinhole.params import format_measure
 
     out = frame.copy()
     if result:
         cv2.ellipse(out, result["ellipse"], (0, 255, 0), 1, cv2.LINE_AA)
         center = tuple(round(v) for v in result["center"])
         cv2.circle(out, center, 2, (0, 0, 255), -1, cv2.LINE_AA)
-        label = "PINHOLE " + format_xy(
+        label = "PINHOLE " + format_measure(
             result["center"][0], result["center"][1],
-            px_per_mm_x, px_per_mm_y, out.shape[1], out.shape[0],
+            px_per_mm_x, px_per_mm_y, out.shape[1], out.shape[0], px_per_mm_z,
         )
     else:
         label = "PINHOLE: tidak terdeteksi"

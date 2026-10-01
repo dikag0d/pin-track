@@ -483,11 +483,14 @@ def _hline(image, y, color):
 
 def format_tip_xy(
     tip_x, tip_y, px_per_mm_x=0.0, px_per_mm_y=0.0, frame_w=640, frame_h=480,
+    px_per_mm_z=0.0,
 ) -> str:
-    """Koordinat ujung. Skala checkerboard mengubah piksel menjadi milimeter."""
-    from pinhole.params import format_xy
+    """Koordinat ujung. SIDE menjadi Z; TOP menjadi X dan Y."""
+    from pinhole.params import format_measure
 
-    return format_xy(tip_x, tip_y, px_per_mm_x, px_per_mm_y, frame_w, frame_h)
+    return format_measure(
+        tip_x, tip_y, px_per_mm_x, px_per_mm_y, frame_w, frame_h, px_per_mm_z,
+    )
 
 
 def tip_marker_radius(thread) -> int:
@@ -546,6 +549,7 @@ def draw_insertion_overlay(frame, pinhole, thread, from_right=True):
 
 def draw_thread(
     frame, thread, enabled=True, px_per_mm_x=0.0, px_per_mm_y=0.0,
+    px_per_mm_z=0.0,
 ):
     """Gambar satu lingkaran ujung, silang, dan koordinat dalam mm bila skala ada."""
     if not enabled:
@@ -563,7 +567,11 @@ def draw_thread(
         if 0 <= tip[1] < out.shape[0] and 0 <= tip[0] < out.shape[1]:
             out[tip[1], tip[0]] = (0, 0, 255)
         text = (
-            f"UJUNG BENANG {format_tip_xy(tip_x, tip_y, px_per_mm_x, px_per_mm_y, out.shape[1], out.shape[0])}"
+            "UJUNG BENANG "
+            + format_tip_xy(
+                tip_x, tip_y, px_per_mm_x, px_per_mm_y,
+                out.shape[1], out.shape[0], px_per_mm_z,
+            )
         )
     else:
         text = "UJUNG BENANG: tidak terdeteksi"
