@@ -15,7 +15,13 @@ import cv2
 import numpy as np
 
 from pinhole.capture import CaptureWorker
-from pinhole.params import defaults_for, validate_parameters
+from pinhole.params import (
+    TOP_PX_PER_MM_X,
+    TOP_PX_PER_MM_Y,
+    defaults_for,
+    format_xy,
+    validate_parameters,
+)
 from pinhole.thread_tip import (
     BrownThreadTipTracker,
     draw_insertion_overlay,
@@ -319,6 +325,17 @@ class InsertionPathTest(unittest.TestCase):
         thread = _thread(tip=(420.4, 220.6), across=20.0)
         self.assertEqual(format_tip_xy(*thread["tip"]), "X 420 Y 221")
         self.assertNotIn(",", format_tip_xy(*thread["tip"]))
+        one_mm = format_xy(
+            TOP_PX_PER_MM_X, TOP_PX_PER_MM_Y, TOP_PX_PER_MM_X, TOP_PX_PER_MM_Y,
+        )
+        self.assertEqual(one_mm, "X 1.00 Y 1.00 mm")
+        self.assertNotIn(",", one_mm)
+        doubled = format_xy(
+            TOP_PX_PER_MM_X, TOP_PX_PER_MM_Y,
+            TOP_PX_PER_MM_X, TOP_PX_PER_MM_Y,
+            frame_w=1280, frame_h=960,
+        )
+        self.assertEqual(doubled, "X 0.50 Y 0.50 mm")
         blank = np.full((480, 640, 3), 30, np.uint8)
         out = draw_thread(blank, thread)
         yellow = (
@@ -412,10 +429,15 @@ class ThreadGuiTest(unittest.TestCase):
         self.assertTrue(np.any(shown != hidden))
         x, y = (int(round(v)) for v in thread["tip"])
         np.testing.assert_array_equal(shown[y, x], (0, 0, 255))
-        xy = format_tip_xy(*thread["tip"])
+        p = pane.parameters()
+        frame_h, frame_w = frame.shape[:2]
+        xy = format_tip_xy(
+            *thread["tip"], p["px_per_mm_x"], p["px_per_mm_y"], frame_w, frame_h,
+        )
         text = pane.thread_readout.text()
         self.assertIn(xy, text)
         self.assertNotIn(",", xy)
+        self.assertIn(" mm", text)
         self.assertIn(f"ujung {xy}", pane.stats.text())
         self.assertIn("oval kunci", pane.thread_readout.text())
 
@@ -427,7 +449,14 @@ class ThreadGuiTest(unittest.TestCase):
         pane.view_mode.setCurrentIndex(pane.view_mode.findText("Mask benang"))
         pane.render()
         self.assertGreater(int(pane.shown.max()), 200)
-        self.assertIn(format_tip_xy(*thread["tip"]), pane.thread_readout.text())
+        p = pane.parameters()
+        frame_h, frame_w = frame.shape[:2]
+        self.assertIn(
+            format_tip_xy(
+                *thread["tip"], p["px_per_mm_x"], p["px_per_mm_y"], frame_w, frame_h,
+            ),
+            pane.thread_readout.text(),
+        )
         pane.view_mode.setCurrentIndex(0)
 
         original = pane.parameters()
