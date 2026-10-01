@@ -33,6 +33,7 @@ from pinhole.params import (
     GEOMETRY_FIELDS,
     HSV_FIELDS,
     IMAGE_FIELDS,
+    SCALE_FIELDS,
     SIDE_REFERENCE,
     THREAD_HSV_FIELDS,
     THREAD_MEASURE_FIELDS,
@@ -42,6 +43,8 @@ from pinhole.params import (
     ZOOM_FIELDS,
     TRACK_FIELDS,
     defaults_for,
+    format_xy,
+    length_mm,
     validate_parameters,
 )
 from pinhole.thread_tip import (
@@ -326,6 +329,15 @@ class CameraPane(QGroupBox):
         self.add_check(tracking_form, "ecc_on", "Aktifkan ECC")
         self.add_check(tracking_form, "guides", "Tampilkan panduan referensi")
         self.add_fields(tracking_form, TRACK_FIELDS)
+        self.add_fields(tracking_form, SCALE_FIELDS)
+        scale_note = QLabel(
+            "Kotak checkerboard 1 mm pada gambar 640×480. "
+            "Isi piksel mendatar dan menurun untuk satu kotak. "
+            "0 menampilkan koordinat dalam piksel. "
+            "TOP bawaan: X 61.5 dan Y 63.9."
+        )
+        scale_note.setWordWrap(True)
+        tracking_form.addRow(scale_note)
 
         thread_form = self.add_tab(tabs, "Benang")
         self.add_check(thread_form, "thread_on", "Aktifkan deteksi ujung benang")
@@ -438,8 +450,7 @@ class CameraPane(QGroupBox):
         note.setWordWrap(True)
         hardware_form.addRow(note)
 
-        if role == "side":
-            self.fill_parameters(defaults_for("side"))
+        self.fill_parameters(defaults_for(role))
 
         self.source.currentIndexChanged.connect(self.update_controls)
         self.timer = QTimer(self)
@@ -714,26 +725,34 @@ class CameraPane(QGroupBox):
         else:
             out = packet["adjusted"]
 
-        enabled = bool(self.parameters().get("thread_on", True))
+        params = self.parameters()
+        enabled = bool(params.get("thread_on", True))
         thread = packet.get("thread") if enabled else None
+        px_per_mm_x = float(params.get("px_per_mm_x", 0.0))
+        px_per_mm_y = float(params.get("px_per_mm_y", 0.0))
         if mode == 0:
-            if self.parameters()["guides"]:
-                out = draw_guides(out, self.parameters())
-            out = draw_detection(out, packet["result"])
-            out = draw_thread(out, thread, enabled=enabled)
-            if self.parameters().get("path_overlay", True):
+            if params["guides"]:
+                out = draw_guides(out, params)
+            out = draw_detection(
+                out, packet["result"], px_per_mm_x, px_per_mm_y,
+            )
+            out = draw_thread(
+                out, thread, enabled=enabled,
+                px_per_mm_x=px_per_mm_x, px_per_mm_y=px_per_mm_y,
+            )
+            if params.get("path_overlay", True):
                 out = draw_insertion_overlay(
                     out,
                     packet["result"],
                     thread,
-                    from_right=bool(self.parameters().get("thread_from_right", True)),
+                    from_right=bool(params.get("thread_from_right", True)),
                 )
         aligned = None
-        if enabled and self.parameters().get("path_overlay", True):
+        if enabled and params.get("path_overlay", True):
             aligned = insertion_paths(
                 packet["result"],
                 thread,
-                from_right=bool(self.parameters().get("thread_from_right", True)),
+                from_right=bool(params.get("thread_from_right", True)),
             )["aligned"]
         self._show_thread_readout(thread, enabled, aligned)
 
@@ -754,13 +773,21 @@ class CameraPane(QGroupBox):
         result = packet["result"]
         if result:
             cx, cy = result["center"]
-            text += f" | X={cx:.2f}, Y={cy:.2f} px | match={result['score']:.3f}"
+            text += (
+                f" | lubang {format_xy(cx, cy, px_per_mm_x, px_per_mm_y, width, height)}"
+                f" | match={result['score']:.3f}"
+            )
             if result["ecc"] is not None:
                 text += f" | ECC={result['ecc']:.3f}"
         if enabled:
             if thread:
                 tip_x, tip_y = thread["tip"]
-                text += f" | ujung {format_tip_xy(tip_x, tip_y)}"
+                text += (
+                    " | ujung "
+                    + format_tip_xy(
+                        tip_x, tip_y, px_per_mm_x, px_per_mm_y, width, height,
+                    )
+                )
             else:
                 text += " | ujung tidak terdeteksi"
         self.stats.setText(text)
@@ -776,13 +803,32 @@ class CameraPane(QGroupBox):
             self._set_thread_readout("Ujung benang: tidak terdeteksi")
             return
         tip_x, tip_y = thread["tip"]
+        frame_h, frame_w = self._frame_size()
+        px_per_mm_x = float(self.parameters().get("px_per_mm_x", 0.0))
+        px_per_mm_y = float(self.parameters().get("px_per_mm_y", 0.0))
         body = thread.get("body_thickness")
-        width_txt = f" | lebar {body:.1f} px" if body else ""
+        body_mm = length_mm(body, px_per_mm_y, frame_h, 480) if body else None
+        if body_mm is not None:
+            width_txt = f" | lebar {body_mm:.2f} mm"
+        elif body:
+            width_txt = f" | lebar {body:.1f} px"
+        else:
+            width_txt = ""
         if thread.get("oval_locked"):
             along, across = thread["tip_ellipse"][1]
-            oval_txt = f" | oval kunci {along:.1f}×{across:.1f}"
+            along_mm = length_mm(along, px_per_mm_x, frame_w, 640)
+            across_mm = length_mm(across, px_per_mm_y, frame_h, 480)
+            if along_mm is not None and across_mm is not None:
+                oval_txt = f" | oval kunci {along_mm:.2f}×{across_mm:.2f} mm"
+            else:
+                oval_txt = f" | oval kunci {along:.1f}×{across:.1f}"
         else:
-            oval_txt = f" | tebal {thread['local_thickness']:.1f} px"
+            thick = thread["local_thickness"]
+            thick_mm = length_mm(thick, px_per_mm_y, frame_h, 480)
+            if thick_mm is not None:
+                oval_txt = f" | tebal {thick_mm:.2f} mm"
+            else:
+                oval_txt = f" | tebal {thick:.1f} px"
         if aligned is True:
             align_txt = " | jalur selaras"
         elif aligned is False:
@@ -790,8 +836,22 @@ class CameraPane(QGroupBox):
         else:
             align_txt = ""
         self._set_thread_readout(
-            f"Ujung benang: {format_tip_xy(tip_x, tip_y)} px{width_txt}{oval_txt}{align_txt}"
+            "Ujung benang: "
+            + format_tip_xy(
+                tip_x, tip_y, px_per_mm_x, px_per_mm_y, frame_w, frame_h,
+            )
+            + f"{width_txt}{oval_txt}{align_txt}"
         )
+
+    def _frame_size(self):
+        packet = self.packet
+        if packet is not None and packet.get("raw") is not None:
+            height, width = packet["raw"].shape[:2]
+            return height, width
+        if self.shown is not None:
+            height, width = self.shown.shape[:2]
+            return height, width
+        return 480, 640
 
     def calibrate(self):
         if self.frozen is None:

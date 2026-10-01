@@ -64,6 +64,16 @@ THREAD_SMOOTH_FIELDS = [
     ("thread_quiet_alpha", "Perataan sangat diam", 0.0, 1.0, 0.32, 0.01),
 ]
 
+# Piksel per 1 mm pada referensi 640 x 480. 0 = tampilkan piksel.
+# TOP diukur dari checkerboard kotak 1 mm: 61.5 px mendatar, 63.9 px menurun.
+SCALE_FIELDS = [
+    ("px_per_mm_x", "Piksel per mm X", 0.0, 500.0, 0.0, 0.1),
+    ("px_per_mm_y", "Piksel per mm Y", 0.0, 500.0, 0.0, 0.1),
+]
+
+TOP_PX_PER_MM_X = 61.5
+TOP_PX_PER_MM_Y = 63.9
+
 # Oval ujung pada referensi 640 x 480. Lebar dikunci karena benang tidak berubah.
 THREAD_OVAL_FIELDS = [
     ("thread_oval_along", "Oval sepanjang benang", 1.0, 640.0, 12.0, 0.5),
@@ -103,7 +113,7 @@ GEOMETRY_FIELDS = [
 ]
 
 ALL_FIELDS = (
-    IMAGE_FIELDS + HSV_FIELDS + TRACK_FIELDS + GEOMETRY_FIELDS
+    IMAGE_FIELDS + HSV_FIELDS + TRACK_FIELDS + SCALE_FIELDS + GEOMETRY_FIELDS
     + VIDEO_RES_FIELDS + ZOOM_FIELDS
     + THREAD_HSV_FIELDS + THREAD_MEASURE_FIELDS + THREAD_SMOOTH_FIELDS
     + THREAD_OVAL_FIELDS
@@ -152,7 +162,36 @@ SIDE_DEFAULTS = {
 
 
 def defaults_for(role: str) -> dict:
-    return dict(SIDE_DEFAULTS if role == "side" else DEFAULTS)
+    values = dict(SIDE_DEFAULTS if role == "side" else DEFAULTS)
+    if role == "top":
+        values["px_per_mm_x"] = TOP_PX_PER_MM_X
+        values["px_per_mm_y"] = TOP_PX_PER_MM_Y
+    return values
+
+
+def format_xy(x, y, px_per_mm_x=0.0, px_per_mm_y=0.0, frame_w=640, frame_h=480) -> str:
+    """Koordinat tanpa koma. Skala > 0 mengubah piksel frame ke milimeter.
+
+    Skala diukur pada referensi 640 x 480. Frame lain diskalakan ke referensi
+    itu sebelum dibagi piksel-per-mm.
+    """
+    if (
+        px_per_mm_x > 0
+        and px_per_mm_y > 0
+        and frame_w > 0
+        and frame_h > 0
+    ):
+        mm_x = float(x) * 640.0 / float(frame_w) / float(px_per_mm_x)
+        mm_y = float(y) * 480.0 / float(frame_h) / float(px_per_mm_y)
+        return f"X {mm_x:.2f} Y {mm_y:.2f} mm"
+    return f"X {int(round(float(x)))} Y {int(round(float(y)))}"
+
+
+def length_mm(px, px_per_mm, frame_span, ref_span) -> float | None:
+    """Panjang piksel pada satu sumbu, atau None bila skala belum diisi."""
+    if px_per_mm <= 0 or frame_span <= 0:
+        return None
+    return float(px) * float(ref_span) / float(frame_span) / float(px_per_mm)
 
 
 def validate_parameters(p, top=True):
