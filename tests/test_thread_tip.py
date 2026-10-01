@@ -16,10 +16,12 @@ import numpy as np
 
 from pinhole.capture import CaptureWorker
 from pinhole.params import (
+    SIDE_PX_PER_MM_Z,
     TOP_PX_PER_MM_X,
     TOP_PX_PER_MM_Y,
     defaults_for,
     format_xy,
+    format_z,
     validate_parameters,
 )
 from pinhole.thread_tip import (
@@ -336,6 +338,14 @@ class InsertionPathTest(unittest.TestCase):
             frame_w=1280, frame_h=960,
         )
         self.assertEqual(doubled, "X 0.50 Y 0.50 mm")
+        side = defaults_for("side")
+        self.assertEqual(side["px_per_mm_x"], 0.0)
+        self.assertEqual(side["px_per_mm_y"], 0.0)
+        self.assertEqual(side["px_per_mm_z"], SIDE_PX_PER_MM_Z)
+        z_text = format_z(SIDE_PX_PER_MM_Z, SIDE_PX_PER_MM_Z)
+        self.assertEqual(z_text, "Z 1.00 mm")
+        self.assertNotIn("X", z_text)
+        self.assertEqual(defaults_for("top")["px_per_mm_z"], 0.0)
         blank = np.full((480, 640, 3), 30, np.uint8)
         out = draw_thread(blank, thread)
         yellow = (
