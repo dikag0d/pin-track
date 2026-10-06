@@ -17,6 +17,7 @@ from pinhole.params import (
     SIDE_PX_PER_MM_Z,
     TOP_PX_PER_MM_X,
     TOP_PX_PER_MM_Y,
+    defaults_for,
     ruler_measurement,
 )
 from pinhole.ui import VideoView
@@ -151,6 +152,35 @@ class RulerGuiTest(unittest.TestCase):
         self.assertNotIn("mendatar belum berskala", text)
         self.assertNotIn(",", text)
         pane.clear_ruler()
+
+    def test_px_per_mm_input_drives_the_ruler(self):
+        top = self.window.panes[1]
+        side = self.window.panes[0]
+        self.assertAlmostEqual(top.px_per_mm_editor["px_per_mm_x"].value(), TOP_PX_PER_MM_X)
+        self.assertAlmostEqual(top.px_per_mm_editor["px_per_mm_y"].value(), TOP_PX_PER_MM_Y)
+        self.assertEqual(top.px_per_mm_editor["px_per_mm_z"].value(), 0.0)
+        self.assertEqual(side.px_per_mm_editor["px_per_mm_x"].value(), 0.0)
+        self.assertAlmostEqual(
+            side.px_per_mm_editor["px_per_mm_z"].value(), SIDE_PX_PER_MM_Z
+        )
+
+        frame = np.full((480, 640, 3), 24, np.uint8)
+        top.packet = _packet(frame)
+        top.view.ruler_start = (0.0, 0.0)
+        top.view.ruler_end = (100.0, 0.0)
+        try:
+            top.px_per_mm_editor["px_per_mm_x"].setValue(100.0)
+            self.assertAlmostEqual(top.parameters()["px_per_mm_x"], 100.0)
+            self.assertAlmostEqual(top.inputs["px_per_mm_x"].value(), 100.0)
+            top.on_ruler_placed()
+            self.assertIn("jarak 1.00 mm", top.ruler_readout.text())
+
+            top.inputs["px_per_mm_x"].setValue(50.0)
+            self.assertAlmostEqual(top.px_per_mm_editor["px_per_mm_x"].value(), 50.0)
+            self.assertIn("jarak 2.00 mm", top.ruler_readout.text())
+        finally:
+            top.fill_parameters(defaults_for("top"))
+            top.clear_ruler()
 
     def test_click_sets_start_then_end(self):
         frame = np.full((480, 640, 3), 20, np.uint8)
