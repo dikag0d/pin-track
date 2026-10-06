@@ -382,6 +382,8 @@ class CameraPane(QGroupBox):
         ruler_row.addStretch()
         layout.addLayout(ruler_row)
 
+        self._add_px_per_mm_editor(layout)
+
         self.ruler_readout = QLabel("Penggaris: klik titik awal, lalu titik akhir.")
         self.ruler_readout.setObjectName("rulerReadout")
         self.ruler_readout.setWordWrap(True)
@@ -442,9 +444,11 @@ class CameraPane(QGroupBox):
         self.add_check(tracking_form, "guides", "Tampilkan panduan referensi")
         self.add_fields(tracking_form, TRACK_FIELDS)
         self.add_fields(tracking_form, SCALE_FIELDS)
+        self._bind_px_per_mm_editors()
         scale_note = QLabel(
             "Kotak checkerboard 1 mm pada gambar 640×480. "
             "TOP memakai X dan Y. SIDE hanya Z dari piksel tegak. "
+            "Isian di atas gambar memakai angka yang sama. "
             "0 menampilkan piksel. "
             "TOP bawaan: X 61.5, Y 63.9. SIDE bawaan: Z 60.7."
         )
@@ -569,6 +573,52 @@ class CameraPane(QGroupBox):
         self.timer.timeout.connect(self.poll)
         self.timer.start(30)
         self.update_controls()
+
+    def _add_px_per_mm_editor(self, layout):
+        row = QHBoxLayout()
+        title = QLabel("Piksel per mm")
+        title.setObjectName("pxPerMmTitle")
+        row.addWidget(title)
+        self.px_per_mm_editor = {}
+        tips = {
+            "x": "Sumbu mendatar. 0 menampilkan piksel.",
+            "y": "Sumbu tegak kamera TOP. 0 menampilkan piksel.",
+            "z": "Sumbu tegak kamera SIDE. 0 menampilkan piksel.",
+        }
+        for axis in ("x", "y", "z"):
+            label = QLabel(axis.upper())
+            spin = QDoubleSpinBox()
+            spin.setObjectName(f"pxPerMm{axis.upper()}")
+            spin.setDecimals(3)
+            spin.setRange(0.0, 500.0)
+            spin.setSingleStep(0.1)
+            spin.setKeyboardTracking(False)
+            spin.setToolTip(tips[axis])
+            self.px_per_mm_editor[f"px_per_mm_{axis}"] = spin
+            row.addWidget(label)
+            row.addWidget(spin)
+        row.addStretch()
+        layout.addLayout(row)
+
+    def _bind_px_per_mm_editors(self):
+        for key, editor in self.px_per_mm_editor.items():
+            source = self.inputs[key]
+
+            def from_source(value, target=editor):
+                if abs(target.value() - value) > 1e-6:
+                    target.blockSignals(True)
+                    target.setValue(value)
+                    target.blockSignals(False)
+
+            def from_editor(value, target=source):
+                if abs(target.value() - value) > 1e-6:
+                    target.setValue(value)
+
+            source.valueChanged.connect(from_source)
+            editor.valueChanged.connect(from_editor)
+            editor.blockSignals(True)
+            editor.setValue(source.value())
+            editor.blockSignals(False)
 
     @staticmethod
     def add_tab(tabs, name):
