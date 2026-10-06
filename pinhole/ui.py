@@ -45,6 +45,7 @@ from pinhole.params import (
     defaults_for,
     format_measure,
     length_mm,
+    ruler_measurement,
     validate_parameters,
 )
 from pinhole.thread_tip import (
@@ -56,8 +57,43 @@ from pinhole.vision import draw_detection, draw_guides, prepare_image, tracker_f
 RESOLUTIONS = ("640x480", "800x600", "1280x720", "1920x1080")
 
 
+def draw_ruler(frame, start, end, label):
+    """Garis magenta dari titik awal ke titik akhir, plus jarak di bawah gambar."""
+    out = frame.copy()
+    color = (255, 0, 255)
+    outline = (40, 0, 40)
+
+    def marker(point, name):
+        x, y = int(round(point[0])), int(round(point[1]))
+        cv2.circle(out, (x, y), 6, outline, 2, cv2.LINE_AA)
+        cv2.circle(out, (x, y), 4, color, 2, cv2.LINE_AA)
+        cv2.putText(
+            out, name, (x + 8, y - 8), cv2.FONT_HERSHEY_SIMPLEX,
+            0.55, color, 2, cv2.LINE_AA,
+        )
+        return x, y
+
+    x0, y0 = marker(start, "A")
+    if end is not None:
+        x1, y1 = marker(end, "B")
+        cv2.line(out, (x0, y0), (x1, y1), outline, 4, cv2.LINE_AA)
+        cv2.line(out, (x0, y0), (x1, y1), color, 2, cv2.LINE_AA)
+    if label:
+        origin = (16, out.shape[0] - 18)
+        cv2.putText(
+            out, label, origin, cv2.FONT_HERSHEY_SIMPLEX,
+            0.7, outline, 4, cv2.LINE_AA,
+        )
+        cv2.putText(
+            out, label, origin, cv2.FONT_HERSHEY_SIMPLEX,
+            0.7, color, 2, cv2.LINE_AA,
+        )
+    return out
+
+
 class VideoView(QWidget):
     selected = Signal(float, float, float, float)
+    rulerPlaced = Signal()
 
     def __init__(self):
         super().__init__()
@@ -71,6 +107,14 @@ class VideoView(QWidget):
         self.pan_x = 0.0
         self.pan_y = 0.0
         self.is_resizing = False
+        self.selecting = False
+        self.drag_start = None
+        self.drag_end = None
+        self.ruler_mode = False
+        self.ruler_start = None
+        self.ruler_end = None
+        self.ruler_hover = None
+        self.ruler_press = None
 
     def zoom_in(self):
         self.zoom_level = min(self.zoom_level * 1.1, 50.0)
@@ -123,48 +167,99 @@ class VideoView(QWidget):
                 QRectF(self.drag_start, self.drag_end).normalized()
             )
 
+        if (
+            self.ruler_mode
+            and self.ruler_start is not None
+            and self.ruler_end is None
+            and self.ruler_hover is not None
+        ):
+            start = self._widget_point(self.ruler_start)
+            hover = self._widget_point(self.ruler_hover)
+            if start is not None and hover is not None:
+                painter.setPen(QPen(QColor("#ff4dff"), 2))
+                painter.drawLine(start[0], start[1], hover[0], hover[1])
+                painter.drawEllipse(start[0] - 4, start[1] - 4, 8, 8)
+
+    def _image_point(self, point):
+        rect = self.image_rect
+        if self.image is None or rect.width() <= 0 or rect.height() <= 0:
+            return None
+        x = (point.x() - rect.left()) / rect.width()
+        y = (point.y() - rect.top()) / rect.height()
+        return (
+            float(np.clip(x, 0, 1) * self.image.width()),
+            float(np.clip(y, 0, 1) * self.image.height()),
+        )
+
+    def _widget_point(self, image_xy):
+        rect = self.image_rect
+        if self.image is None or rect.width() <= 0 or rect.height() <= 0:
+            return None
+        x = rect.left() + float(image_xy[0]) / self.image.width() * rect.width()
+        y = rect.top() + float(image_xy[1]) / self.image.height() * rect.height()
+        return x, y
+
     def mousePressEvent(self, event):
         if (
-            self.selecting
-            and self.image is not None
-            and event.button() == Qt.MouseButton.LeftButton
-            and self.image_rect.contains(event.position())
+            self.image is None
+            or event.button() != Qt.MouseButton.LeftButton
+            or not self.image_rect.contains(event.position())
         ):
+            return
+        if self.selecting:
             self.drag_start = event.position()
             self.drag_end = event.position()
             self.update()
+            return
+        if self.ruler_mode:
+            self.ruler_press = event.position()
 
     def mouseMoveEvent(self, event):
         if self.drag_start is not None:
             self.drag_end = event.position()
             self.update()
+            return
+        if (
+            self.ruler_mode
+            and self.ruler_start is not None
+            and self.ruler_end is None
+            and self.image is not None
+        ):
+            self.ruler_hover = self._image_point(event.position())
+            self.update()
 
     def mouseReleaseEvent(self, event):
-        if self.drag_start is None or self.image is None:
+        if self.selecting and self.drag_start is not None and self.image is not None:
+            x0y0 = self._image_point(self.drag_start)
+            x1y1 = self._image_point(event.position())
+            self.drag_start = None
+            self.drag_end = None
+            self.update()
+            if x0y0 is None or x1y1 is None:
+                return
+            x0, y0 = x0y0
+            x1, y1 = x1y1
+            if abs(x1 - x0) >= 3 and abs(y1 - y0) >= 3:
+                self.selected.emit(
+                    min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)
+                )
             return
 
-        rect = self.image_rect
-        if rect.width() <= 0 or rect.height() <= 0:
+        if self.ruler_press is None or not self.ruler_mode or self.image is None:
+            self.ruler_press = None
             return
-
-        def convert(point):
-            x = (point.x() - rect.left()) / rect.width()
-            y = (point.y() - rect.top()) / rect.height()
-            return (
-                float(np.clip(x, 0, 1) * self.image.width()),
-                float(np.clip(y, 0, 1) * self.image.height()),
-            )
-
-        x0, y0 = convert(self.drag_start)
-        x1, y1 = convert(event.position())
-        self.drag_start = None
-        self.drag_end = None
+        self.ruler_press = None
+        point = self._image_point(event.position())
+        if point is None:
+            return
+        if self.ruler_start is None or self.ruler_end is not None:
+            self.ruler_start = point
+            self.ruler_end = None
+        else:
+            self.ruler_end = point
+        self.ruler_hover = None
+        self.rulerPlaced.emit()
         self.update()
-
-        if abs(x1 - x0) >= 3 and abs(y1 - y0) >= 3:
-            self.selected.emit(
-                min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)
-            )
 
 
 class CameraPane(QGroupBox):
@@ -276,8 +371,25 @@ class CameraPane(QGroupBox):
         self.view_mode.currentIndexChanged.connect(self.render)
         layout.addWidget(self.view_mode)
 
+        ruler_row = QHBoxLayout()
+        self.ruler_button = QPushButton("Penggaris")
+        self.ruler_button.setCheckable(True)
+        self.ruler_button.toggled.connect(self.toggle_ruler)
+        self.ruler_clear_button = QPushButton("Hapus penggaris")
+        self.ruler_clear_button.clicked.connect(self.clear_ruler)
+        ruler_row.addWidget(self.ruler_button)
+        ruler_row.addWidget(self.ruler_clear_button)
+        ruler_row.addStretch()
+        layout.addLayout(ruler_row)
+
+        self.ruler_readout = QLabel("Penggaris: klik titik awal, lalu titik akhir.")
+        self.ruler_readout.setObjectName("rulerReadout")
+        self.ruler_readout.setWordWrap(True)
+        layout.addWidget(self.ruler_readout)
+
         self.view = VideoView()
         self.view.selected.connect(self.select_region)
+        self.view.rulerPlaced.connect(self.on_ruler_placed)
         layout.addWidget(self.view, 1)
 
         status_box = QFrame()
@@ -535,7 +647,10 @@ class CameraPane(QGroupBox):
             return
         if self.worker is not None:
             self.worker.configure(self.parameters())
-        if self.frozen is not None:
+        self._update_ruler_readout()
+        if self.frozen is not None or (
+            self.view.ruler_end is not None and self.packet is not None
+        ):
             self.render()
 
     def source_value(self):
@@ -699,7 +814,9 @@ class CameraPane(QGroupBox):
             try:
                 p = self.parameters()
                 adjusted, _, _ = prepare_image(self.frozen, p)
-                self.shown = draw_thread_guide(draw_guides(adjusted, p), p)
+                self.shown = self._with_ruler(
+                    draw_thread_guide(draw_guides(adjusted, p), p)
+                )
                 self.view.set_frame(self.shown)
             except (ValueError, cv2.error) as exc:
                 self.message.setText(str(exc))
@@ -758,6 +875,7 @@ class CameraPane(QGroupBox):
             )["aligned"]
         self._show_thread_readout(thread, enabled, aligned)
 
+        out = self._with_ruler(out)
         self.shown = out
         self.view.set_frame(out)
 
@@ -853,6 +971,67 @@ class CameraPane(QGroupBox):
             )
             + f"{width_txt}{oval_txt}{align_txt}"
         )
+
+    def toggle_ruler(self, checked):
+        self.view.ruler_mode = checked
+        self.view.setMouseTracking(checked)
+        if checked:
+            self.message.setText(
+                "Penggaris aktif. Klik titik awal, lalu titik akhir. "
+                "Jarak memakai skala piksel per mm."
+            )
+        self._update_ruler_readout()
+
+    def clear_ruler(self):
+        self.view.ruler_start = None
+        self.view.ruler_end = None
+        self.view.ruler_hover = None
+        self._update_ruler_readout()
+        if self.frozen is not None or self.packet is not None:
+            self.render()
+
+    def on_ruler_placed(self):
+        self._update_ruler_readout()
+        if self.frozen is not None or self.packet is not None:
+            self.render()
+
+    def _update_ruler_readout(self):
+        start = self.view.ruler_start
+        end = self.view.ruler_end
+        if start is None:
+            self.ruler_readout.setText(
+                "Penggaris: klik titik awal, lalu titik akhir."
+            )
+            return
+        if end is None:
+            self.ruler_readout.setText(
+                f"Penggaris: titik awal X {start[0]:.0f} Y {start[1]:.0f}. "
+                "Klik titik akhir."
+            )
+            return
+        height, width = self._frame_size()
+        p = self.parameters()
+        text = ruler_measurement(
+            start[0], start[1], end[0], end[1],
+            p["px_per_mm_x"], p["px_per_mm_y"], width, height, p["px_per_mm_z"],
+        )["text"]
+        self.ruler_readout.setText(text)
+
+    def _with_ruler(self, frame):
+        start = self.view.ruler_start
+        if start is None:
+            return frame
+        end = self.view.ruler_end
+        label = ""
+        if end is not None:
+            height, width = frame.shape[:2]
+            p = self.parameters()
+            label = ruler_measurement(
+                start[0], start[1], end[0], end[1],
+                p["px_per_mm_x"], p["px_per_mm_y"], width, height,
+                p["px_per_mm_z"],
+            )["overlay"]
+        return draw_ruler(frame, start, end, label)
 
     def _frame_size(self):
         packet = self.packet
