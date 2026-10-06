@@ -222,6 +222,96 @@ def length_mm(px, px_per_mm, frame_span, ref_span) -> float | None:
     return float(px) * float(ref_span) / float(frame_span) / float(px_per_mm)
 
 
+def ruler_measurement(
+    x0, y0, x1, y1,
+    px_per_mm_x=0.0, px_per_mm_y=0.0, frame_w=640, frame_h=480,
+    px_per_mm_z=0.0,
+) -> dict:
+    """Jarak penggaris dari titik awal ke titik akhir.
+
+    Koordinat dalam piksel frame. Skala diukur pada referensi 640×480.
+    TOP memakai X dan Y, jadi jarak adalah garis lurus dalam mm.
+    SIDE memakai Z pada sumbu tegak. Jika skala X juga diisi, jarak miring
+    ikut dihitung. Tanpa skala, hasil tetap piksel.
+    """
+    x0, y0, x1, y1 = (float(v) for v in (x0, y0, x1, y1))
+    vertical_scale = float(px_per_mm_z) if float(px_per_mm_z) > 0 else float(px_per_mm_y)
+    vertical_axis = "Z" if float(px_per_mm_z) > 0 else "Y"
+    mm_x0 = length_mm(x0, px_per_mm_x, frame_w, 640)
+    mm_x1 = length_mm(x1, px_per_mm_x, frame_w, 640)
+    mm_y0 = length_mm(y0, vertical_scale, frame_h, 480)
+    mm_y1 = length_mm(y1, vertical_scale, frame_h, 480)
+    delta_x = None if mm_x0 is None or mm_x1 is None else mm_x1 - mm_x0
+    delta_y = None if mm_y0 is None or mm_y1 is None else mm_y1 - mm_y0
+
+    if delta_x is not None and delta_y is not None:
+        distance = math.hypot(delta_x, delta_y)
+        unit = "mm"
+        kind = "euclidean"
+    elif delta_y is not None:
+        distance = abs(delta_y)
+        unit = "mm"
+        kind = "vertical"
+    elif delta_x is not None:
+        distance = abs(delta_x)
+        unit = "mm"
+        kind = "horizontal"
+    else:
+        distance = math.hypot(x1 - x0, y1 - y0)
+        unit = "px"
+        kind = "pixels"
+
+    if kind == "euclidean" and vertical_axis == "Z":
+        text = (
+            f"Penggaris: awal X {mm_x0:.2f} Z {mm_y0:.2f} mm"
+            f" | akhir X {mm_x1:.2f} Z {mm_y1:.2f} mm"
+            f" | jarak {distance:.2f} mm"
+        )
+        overlay = f"{distance:.2f} mm"
+    elif kind == "euclidean":
+        text = (
+            f"Penggaris: awal X {mm_x0:.2f} Y {mm_y0:.2f} mm"
+            f" | akhir X {mm_x1:.2f} Y {mm_y1:.2f} mm"
+            f" | jarak {distance:.2f} mm"
+        )
+        overlay = f"{distance:.2f} mm"
+    elif kind == "vertical":
+        horizontal = ""
+        if abs(x1 - x0) >= 1.0:
+            horizontal = " | mendatar belum berskala"
+        text = (
+            f"Penggaris: awal Z {mm_y0:.2f} mm"
+            f" | akhir Z {mm_y1:.2f} mm"
+            f" | ΔZ {distance:.2f} mm"
+            f"{horizontal}"
+        )
+        overlay = f"ΔZ {distance:.2f} mm"
+    elif kind == "horizontal":
+        text = (
+            f"Penggaris: awal X {mm_x0:.2f} mm"
+            f" | akhir X {mm_x1:.2f} mm"
+            f" | ΔX {distance:.2f} mm"
+            f" | tegak belum berskala"
+        )
+        overlay = f"ΔX {distance:.2f} mm"
+    else:
+        text = (
+            f"Penggaris: awal X {int(round(x0))} Y {int(round(y0))}"
+            f" | akhir X {int(round(x1))} Y {int(round(y1))}"
+            f" | jarak {distance:.1f} px"
+        )
+        overlay = f"{distance:.1f} px"
+
+    return {
+        "distance": distance,
+        "unit": unit,
+        "kind": kind,
+        "vertical_axis": vertical_axis,
+        "text": text,
+        "overlay": overlay,
+    }
+
+
 def validate_parameters(p, top=True):
     for key, _, low, high, _, _ in ALL_FIELDS:
         if key not in p:
