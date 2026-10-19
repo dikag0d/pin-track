@@ -5,12 +5,8 @@ Membutuhkan numpy, opencv-python, ffmpeg/ffprobe.
 Jalankan:
     python pinhole_presisi.py samples/side.webm hasil.mp4
 
-Oval referensi dikalibrasi manual pada bukaan frame yang lubangnya terlihat
-jelas (bukan ukuran metrologi). Template tidak diambil dari frame pertama
-karena pada video samping lubang belum tampak di awal rekaman.
-
-Jika video/kamera berubah, kalibrasi ulang REFERENCE_ELLIPSE, TEMPLATE_BOX,
-dan berkas calib/template_side.png.
+Oval lubang adalah daerah gelap di dalam logam terang, di kotak pencarian
+SIDE. Bukan ukuran metrologi. Kalibrasi ulang di GUI jika kamera berubah.
 """
 
 from __future__ import annotations
@@ -24,163 +20,17 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-# Koordinat referensi pada resolusi 640 x 480; panjang sumbu adalah diameter.
-# Dikunci pada bukaan tabung sekitar t=15s pada samples/side.webm.
-REFERENCE_ELLIPSE = ((190.0, 171.0), (24.0, 44.0), -2.0)
-TEMPLATE_BOX = (168, 138, 48, 64)
-SEARCH_BOX = (0.00, 0.16, 0.52, 0.55)
-MIN_MATCH = 0.58
-MIN_MATCH_TRACK = 0.50
-MIN_ECC = 0.72
-MAX_CENTER_JUMP = 42.0
-CALIB_SIZE = (640, 480)
-SCALES = (0.80, 0.88, 0.95, 1.0, 1.07, 1.15)
+from pinhole.params import defaults_for
+from pinhole.vision import SidePinholeTracker
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_TEMPLATE = SCRIPT_DIR / "calib" / "template_side.png"
 DEFAULT_INPUT = SCRIPT_DIR / "samples" / "side.webm"
-
-
-def transformed_ellipse(ellipse, matrix):
-    (cx, cy), (a, b), angle = ellipse
-    t = np.linspace(0, 2 * np.pi, 100, endpoint=False)
-    r = np.deg2rad(angle)
-    rot = np.array([[np.cos(r), -np.sin(r)], [np.sin(r), np.cos(r)]])
-    points = np.column_stack((a / 2 * np.cos(t), b / 2 * np.sin(t))) @ rot.T
-    points += (cx, cy)
-    points = points @ matrix[:, :2].T + matrix[:, 2]
-    return cv2.fitEllipse(points.astype(np.float32).reshape(-1, 1, 2))
 
 
 def _gray(frame):
     if frame.ndim == 2:
         return frame
     return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-
-def load_template(path: Path | None) -> np.ndarray | None:
-    if path is None or not path.is_file():
-        return None
-    image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-    if image is None:
-        raise RuntimeError(f"Template tidak dapat dibaca: {path}")
-    return image
-
-
-class PinholeTracker:
-    def __init__(self, first_frame, template=None):
-        h, w = first_frame.shape[:2]
-        sx, sy = w / CALIB_SIZE[0], h / CALIB_SIZE[1]
-        x, y, tw, th = TEMPLATE_BOX
-        self.box = tuple(
-            int(round(v * s)) for v, s in zip((x, y, tw, th), (sx, sy, sx, sy))
-        )
-        x, y, tw, th = self.box
-        gray = _gray(first_frame)
-        if template is not None:
-            if template.shape != (th, tw):
-                template = cv2.resize(template, (tw, th), interpolation=cv2.INTER_AREA)
-            self.template = template.copy()
-        else:
-            self.template = gray[y : y + th, x : x + tw].copy()
-            if self.template.size == 0:
-                raise RuntimeError("TEMPLATE_BOX di luar frame.")
-        self.ellipse = transformed_ellipse(
-            REFERENCE_ELLIPSE,
-            np.array([[sx, 0, 0], [0, sy, 0]], np.float32),
-        )
-        self.last_center = None
-
-    def _match(self, gray, search_box, min_match):
-        h, w = gray.shape
-        x0, y0, x1, y1 = [int(v * s) for v, s in zip(search_box, (w, h, w, h))]
-        x0, y0 = max(0, x0), max(0, y0)
-        x1, y1 = min(w, x1), min(h, y1)
-        roi = gray[y0:y1, x0:x1]
-        tx, ty, tw, th = self.box
-        best = None
-        for scale in SCALES:
-            template = cv2.resize(
-                self.template,
-                (max(8, round(tw * scale)), max(8, round(th * scale))),
-            )
-            hh, ww = template.shape
-            if hh >= roi.shape[0] or ww >= roi.shape[1]:
-                continue
-            scores = cv2.matchTemplate(roi, template, cv2.TM_CCOEFF_NORMED)
-            _, score, _, location = cv2.minMaxLoc(scores)
-            if best is None or score > best[0]:
-                best = (score, location, template)
-        if best is None or best[0] < min_match:
-            return None
-        score, (dx, dy), template = best
-        hh, ww = template.shape
-        return score, x0 + dx, y0 + dy, template
-
-    def detect(self, frame):
-        gray = _gray(frame)
-        matched = self._match(gray, SEARCH_BOX, MIN_MATCH)
-        from_local = False
-        if matched is None and self.last_center is not None:
-            h, w = gray.shape
-            cx, cy = self.last_center
-            pad_x, pad_y = 0.12, 0.12
-            local = (
-                max(SEARCH_BOX[0], (cx / w) - pad_x),
-                max(SEARCH_BOX[1], (cy / h) - pad_y),
-                min(SEARCH_BOX[2], (cx / w) + pad_x),
-                min(SEARCH_BOX[3], (cy / h) + pad_y),
-            )
-            matched = self._match(gray, local, MIN_MATCH_TRACK)
-            from_local = matched is not None
-        if matched is None:
-            return None
-        score, px, py, template = matched
-        hh, ww = template.shape
-        tx, ty, tw, th = self.box
-        patch = gray[py : py + hh, px : px + ww]
-        if patch.shape[:2] != template.shape:
-            return None
-        warp = np.eye(2, 3, dtype=np.float32)
-        # ECC memetakan koordinat template ke patch frame saat ini.
-        try:
-            cc, candidate = cv2.findTransformECC(
-                template,
-                patch,
-                warp.copy(),
-                cv2.MOTION_AFFINE,
-                (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 50, 1e-4),
-                None,
-                3,
-            )
-            singular = np.linalg.svd(candidate[:, :2], compute_uv=False)
-            if (
-                cc >= MIN_ECC
-                and np.all((singular > 0.80) & (singular < 1.25))
-                and np.linalg.det(candidate[:, :2]) > 0
-                and np.linalg.norm(candidate[:, 2]) < 12
-            ):
-                warp = candidate
-        except cv2.error:
-            pass
-        origin = np.array(
-            [[ww / tw, 0, -tx * ww / tw], [0, hh / th, -ty * hh / th], [0, 0, 1]],
-            np.float32,
-        )
-        affine = np.vstack((warp, [0, 0, 1])) @ origin
-        affine[0, 2] += px
-        affine[1, 2] += py
-        ellipse = transformed_ellipse(self.ellipse, affine[:2])
-        center = ellipse[0]
-        if self.last_center is not None:
-            dx = float(center[0] - self.last_center[0])
-            dy = float(center[1] - self.last_center[1])
-            jump = (dx * dx + dy * dy) ** 0.5
-            if jump > MAX_CENTER_JUMP and (from_local or score < 0.72):
-                self.last_center = None
-                return None
-        self.last_center = center
-        return {"ellipse": ellipse, "center": center, "score": float(score)}
 
 
 def draw(frame, result):
@@ -308,7 +158,7 @@ def write_concat_video(folder: Path, records, timestamps, info, input_video, out
     )
 
 
-def main(input_video="samples/side.webm", output_video="hasil.mp4", template_path=None):
+def main(input_video="samples/side.webm", output_video="hasil.mp4"):
     input_video = str(input_video)
     output_video = str(output_video)
     if Path(input_video).resolve() == Path(output_video).resolve():
@@ -317,8 +167,8 @@ def main(input_video="samples/side.webm", output_video="hasil.mp4", template_pat
     cap = cv2.VideoCapture(input_video)
     if not cap.isOpened():
         raise RuntimeError(f"Video tidak dapat dibuka: {input_video}")
-    template = load_template(Path(template_path) if template_path else DEFAULT_TEMPLATE)
     records = []
+    params = defaults_for("side")
     try:
         with tempfile.TemporaryDirectory(prefix="pinhole_") as directory:
             folder = Path(directory)
@@ -328,8 +178,8 @@ def main(input_video="samples/side.webm", output_video="hasil.mp4", template_pat
                 if not ok:
                     break
                 if tracker is None:
-                    tracker = PinholeTracker(frame, template=template)
-                result = tracker.detect(frame)
+                    tracker = SidePinholeTracker(frame)
+                result, _note = tracker.detect(_gray(frame), params)
                 index = len(records)
                 if not cv2.imwrite(str(folder / f"{index:05d}.png"), draw(frame, result)):
                     raise RuntimeError("Gagal menulis frame.")
@@ -355,10 +205,5 @@ if __name__ == "__main__":
         default=str(DEFAULT_INPUT if DEFAULT_INPUT.is_file() else "samples/side.webm"),
     )
     parser.add_argument("output", nargs="?", default="hasil.mp4")
-    parser.add_argument(
-        "--template",
-        default=str(DEFAULT_TEMPLATE),
-        help="Gambar grayscale template lubang (crop kalibrasi).",
-    )
     args = parser.parse_args()
-    main(args.input, args.output, args.template)
+    main(args.input, args.output)

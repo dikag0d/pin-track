@@ -1,6 +1,6 @@
 # Pelacak lubang jarum
 
-Monitor dua panel: **kiri SIDE** (samping), **kanan TOP** (atas). Deteksi oval memakai template matching multi-skala + ECC. Koordinat dan diameter dalam piksel pada referensi 640×480, bukan ukuran metrologi.
+Monitor dua panel: **kiri SIDE** (samping), **kanan TOP** (atas). SIDE mengunci oval gelap di dalam daerah pencarian. TOP memakai template matching multi-skala + ECC. Koordinat dan diameter dalam piksel pada referensi 640×480, bukan ukuran metrologi.
 
 ```
 pinhole_gui.py          # titik masuk GUI
@@ -13,7 +13,7 @@ pinhole/
 pinhole_presisi.py      # batch CLI untuk rekaman samping
 ```
 
-Algoritme panel TOP tidak diubah. Panel SIDE memakai kelas yang sama, dengan kalibrasi `samples/side.webm` dan penolak loncatan pusat.
+Algoritme panel TOP tidak diubah. Panel SIDE mencari lubang hitam di kotak kalibrasi `samples/side.webm`, lalu menolak loncatan pusat.
 
 ## Dependensi
 
@@ -62,7 +62,7 @@ Jika `top.webm` belum ada, isi path di panel kanan atau biarkan kosong sampai ad
 python pinhole_presisi.py samples/side.webm hasil.mp4
 ```
 
-Menulis `hasil.mp4` dan `hasil.json`.
+Menulis `hasil.mp4` dan `hasil.json`. CLI memakai pelacak oval gelap yang sama dengan panel SIDE.
 
 ## Kalibrasi SIDE
 
