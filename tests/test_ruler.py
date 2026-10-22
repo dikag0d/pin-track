@@ -70,7 +70,8 @@ class RulerMeasurementTest(unittest.TestCase):
         )
         self.assertEqual(measured["kind"], "vertical")
         self.assertAlmostEqual(measured["distance"], 1.0, places=6)
-        self.assertIn("awal Z 0.16 mm", measured["text"])
+        start_mm = 10 / SIDE_PX_PER_MM_Z
+        self.assertIn(f"awal Z {start_mm:.2f} mm", measured["text"])
         self.assertIn("ΔZ 1.00 mm", measured["text"])
         self.assertIn("mendatar belum berskala", measured["text"])
         self.assertNotIn(",", measured["text"])

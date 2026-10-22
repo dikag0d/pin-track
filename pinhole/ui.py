@@ -450,7 +450,7 @@ class CameraPane(QGroupBox):
             "TOP memakai X dan Y. SIDE hanya Z dari piksel tegak. "
             "Isian di atas gambar memakai angka yang sama. "
             "0 menampilkan piksel. "
-            "TOP bawaan: X 61.5, Y 63.9. SIDE bawaan: Z 60.7."
+            "TOP bawaan: X 61.5, Y 63.9. SIDE bawaan: Z 69.3."
         )
         scale_note.setWordWrap(True)
         tracking_form.addRow(scale_note)

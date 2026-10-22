@@ -66,8 +66,8 @@ THREAD_SMOOTH_FIELDS = [
 
 # Piksel per 1 mm pada referensi 640 x 480. 0 = tampilkan piksel.
 # TOP: checkerboard 1 mm, 61.5 px mendatar dan 63.9 px menurun.
-# SIDE: hanya sumbu tegak sebagai Z. Foto 489 px tinggi, kotak tegak 61.8 px,
-# disetarakan ke tinggi 480 menjadi 60.7 px per mm.
+# SIDE: hanya sumbu tegak sebagai Z. Checkerboard 640×480, kotak tegak
+# median 69.3 px per 1 mm (calib/side_checkerboard.png).
 SCALE_FIELDS = [
     ("px_per_mm_x", "Piksel per mm X", 0.0, 500.0, 0.0, 0.1),
     ("px_per_mm_y", "Piksel per mm Y", 0.0, 500.0, 0.0, 0.1),
@@ -76,7 +76,7 @@ SCALE_FIELDS = [
 
 TOP_PX_PER_MM_X = 61.5
 TOP_PX_PER_MM_Y = 63.9
-SIDE_PX_PER_MM_Z = 60.7
+SIDE_PX_PER_MM_Z = 69.3
 
 # Oval ujung pada referensi 640 x 480. Lebar dikunci karena benang tidak berubah.
 # Across 8 px mengikuti benang ramping di rekaman samping. Along lebih panjang
