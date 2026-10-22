@@ -144,6 +144,8 @@ DEFAULTS.update(
 )
 
 # Kalibrasi SIDE pada samples/side.webm, bukaan tabung ~t=15s.
+# Benang samping lebih tipis dan sering tertutup. HSV lebih longgar,
+# komponen boleh lebih rendah, dan celah kecil di sepanjang kawat disambung.
 SIDE_DEFAULTS = {
     **DEFAULTS,
     "min_match": 0.58,
@@ -164,6 +166,17 @@ SIDE_DEFAULTS = {
     "ry0": 0.16,
     "rx1": 0.52,
     "ry1": 0.55,
+    "th_hmax": 28,
+    "th_smin": 40,
+    "th_vmin": 30,
+    "th_vmax": 210,
+    "thread_min_area": 40,
+    "thread_min_width": 12,
+    "thread_max_top": 0.99,
+    "thread_close_w": 15,
+    "thread_cover_gap": 48,
+    "thread_min_body": 2.0,
+    "thread_tip_floor": 1.5,
 }
 
 

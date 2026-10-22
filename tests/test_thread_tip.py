@@ -82,16 +82,23 @@ class ThreadTipTest(unittest.TestCase):
             self.assertTrue(p["thread_on"])
             self.assertTrue(p["thread_from_right"])
             self.assertEqual(p["th_hmin"], 0)
-            self.assertEqual(p["th_hmax"], 22)
-            self.assertEqual(p["th_smin"], 60)
             self.assertAlmostEqual(p["thread_tip_ratio"], 0.30)
             self.assertAlmostEqual(p["thread_still_radius"], 3.2)
             self.assertAlmostEqual(p["thread_quiet_radius"], 1.6)
 
         side = defaults_for("side")
         top = defaults_for("top")
+        self.assertEqual(top["th_hmax"], 22)
+        self.assertEqual(top["th_smin"], 60)
+        self.assertEqual(top["th_vmax"], 230)
+        self.assertNotIn("thread_cover_gap", top)
+        self.assertEqual(side["th_hmax"], 28)
+        self.assertEqual(side["th_smin"], 40)
+        self.assertEqual(side["th_vmin"], 30)
+        self.assertEqual(side["th_vmax"], 210)
+        self.assertEqual(side["thread_cover_gap"], 48)
+        self.assertAlmostEqual(side["thread_min_body"], 2.0)
         self.assertNotEqual(side["cx"], top["cx"])
-        self.assertEqual(side["th_vmax"], top["th_vmax"])
 
     def test_legacy_profile_keeps_thread_defaults(self):
         legacy = {
@@ -105,7 +112,7 @@ class ThreadTipTest(unittest.TestCase):
         self.assertTrue(merged["thread_on"])
         self.assertTrue(merged["thread_from_right"])
         self.assertTrue(merged["thread_oval_lock"])
-        self.assertEqual(merged["th_hmax"], 22)
+        self.assertEqual(merged["th_hmax"], 28)
         self.assertAlmostEqual(merged["thread_still_radius"], 3.2)
         self.assertAlmostEqual(merged["thread_oval_across"], 8.0)
         self.assertAlmostEqual(merged["thread_oval_along"], 22.0)
@@ -215,6 +222,31 @@ class ThreadTipTest(unittest.TestCase):
         result, _mask = BrownThreadTipTracker().detect(make_thread_frame(), p)
         self.assertFalse(result["oval_locked"])
         self.assertLess(result["tip_ellipse"][1][1], 75.0)
+
+    def test_side_follows_a_thin_thread_across_a_cover(self):
+        frame = np.full((480, 640, 3), 246, np.uint8)
+        color = copper_bgr()
+        frame[449:451, 180:300] = color
+        frame[449:451, 340:639] = color
+        side = defaults_for("side")
+        result, mask = BrownThreadTipTracker().detect(frame, side)
+        self.assertIsNotNone(result)
+        tip_x, tip_y = result["tip"]
+        self.assertGreater(tip_x, 170)
+        self.assertLess(tip_x, 230)
+        self.assertAlmostEqual(tip_y, 450, delta=4)
+        self.assertGreater(int(mask[449:451, 180:300].sum()), 0)
+
+        top = BrownThreadTipTracker().detect(frame, defaults_for("top"))[0]
+        self.assertIsNone(top)
+
+        blue = np.uint8([[[120, 200, 170]]])
+        blue = tuple(int(v) for v in cv2.cvtColor(blue, cv2.COLOR_HSV2BGR)[0, 0])
+        frame[449:451, 180:300] = blue
+        frame[449:451, 340:639] = blue
+        missed, blue_mask = BrownThreadTipTracker().detect(frame, side)
+        self.assertIsNone(missed)
+        self.assertEqual(int(blue_mask.sum()), 0)
 
     def test_blue_thread_is_ignored(self):
         frame = make_thread_frame()

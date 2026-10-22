@@ -37,14 +37,15 @@ python pinhole_gui.py --side samples/side.webm --top top.webm
 
 ## Ujung benang
 
-Kedua panel melacak ujung bebas benang coklat/tembaga yang masuk dari tepi gambar. Titik ukur subpiksel ada di mask sebelum penutupan morfologi, jadi kernel tidak menggeser ujung.
+Kedua panel melacak ujung bebas benang coklat/tembaga yang masuk dari tepi gambar. Titik ukur subpiksel ada di mask sebelum penutupan morfologi, jadi kernel tidak menggeser ujung. Pada SIDE, kawat yang tipis sering tertutup: pecahan sebaris disambung sampai celah 48 px, sementara ujung tetap diukur pada piksel benang yang terlihat.
 
 Saat perpindahan di bawah radius diam (default 3.2 px/frame, dan 1.6 px untuk perataan lebih kuat), koordinat diratakan supaya marker tidak bergetar. Di atas radius itu, marker langsung mengikuti pengukuran baru.
 
 | Konstanta | Default |
 | --- | --- |
-| HSV | H 0–22, S 60–255, V 18–230 |
-| Luas / lebar minimum | 250 px / 30 px |
+| HSV TOP | H 0–22, S 60–255, V 18–230 |
+| HSV SIDE | H 0–28, S 40–255, V 30–210 |
+| Luas / lebar minimum | TOP 250 px / 30 px, SIDE 40 px / 12 px |
 | Batas sisi masuk | 0.50 (komponen melewati tengah, ke arah tepi masuk) |
 | Rasio tebal ujung | 0.30 |
 
