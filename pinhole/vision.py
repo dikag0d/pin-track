@@ -283,147 +283,30 @@ class PinholeTracker:
         return result, "TM + ECC" if refined else "TM; tanpa penyempurnaan ECC"
 
 
-def detect_dark_oval(gray, p, previous=None):
-    """Oval lubang: piksel gelap di dalam logam terang, di kotak pencarian.
-
-    Template matching mengunci tekstur terang. Lubang jarum samping adalah
-    oval yang lebih gelap daripada lingkarannya.
-    """
-    height, width = gray.shape[:2]
-    reference, _box, (x0, y0, x1, y1) = geometry(p, width, height)
-    x0, y0 = max(0, int(x0)), max(0, int(y0))
-    x1, y1 = min(width, int(x1)), min(height, int(y1))
-    roi = gray[y0:y1, x0:x1]
-    if roi.size == 0 or min(roi.shape) < 32:
-        return None, "Area pencarian terlalu kecil."
-
-    (_center, (axis_a, axis_b), _angle) = reference
-    expected = max(float(axis_a) * float(axis_b), 1.0)
-    kernel = int(max(axis_a, axis_b) * 1.6)
-    kernel = max(31, min(81, kernel + (kernel % 2 == 0)))
-    blur = cv2.GaussianBlur(roi, (kernel, kernel), 0)
-    contrast = blur.astype(np.int16) - roi.astype(np.int16)
-    if int(contrast.max()) < 40:
-        return None, "Tidak ada lubang gelap."
-    # Seluruh isi lubang, bukan hanya tepi kontras tertinggi.
-    mask = ((blur > 70) & (contrast >= 40)).astype(np.uint8) * 255
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
-    count, labels, stats, _centroids = cv2.connectedComponentsWithStats(mask, 8)
-
-    found = []
-    for index in range(1, count):
-        _x, _y, comp_w, comp_h, area = (int(v) for v in stats[index])
-        if area < 25 or area > expected * 3 or comp_w < 4 or comp_h < 8:
-            continue
-        ys, xs = np.where(labels == index)
-        if len(xs) < 8:
-            continue
-        try:
-            ellipse = cv2.fitEllipse(np.stack([xs, ys], 1).astype(np.float32))
-        except cv2.error:
-            continue
-        (cx, cy), (axis_u, axis_v), angle = ellipse
-        major, minor = max(axis_u, axis_v), min(axis_u, axis_v)
-        expect_major = max(float(axis_a), float(axis_b))
-        expect_minor = min(float(axis_a), float(axis_b))
-        if (
-            minor < 0.22 * expect_minor
-            or major < 0.55 * expect_major
-            or major > 1.7 * expect_major
-            or minor > 1.6 * expect_minor
-            or major / max(minor, 1.0) > 6
-        ):
-            continue
-        # Blob yang menempel tepi kotak pencarian biasanya bayangan, bukan lubang.
-        margin = 12
-        if not (
-            margin <= cx < roi.shape[1] - margin
-            and margin <= cy < roi.shape[0] - margin
-        ):
-            continue
-        gx = int(np.clip(round(cx), 0, roi.shape[1] - 1))
-        gy = int(np.clip(round(cy), 0, roi.shape[0] - 1))
-        filled = np.zeros(roi.shape, np.uint8)
-        cv2.ellipse(
-            filled, (gx, gy),
-            (max(1, int(round(axis_u / 2))), max(1, int(round(axis_v / 2)))),
-            float(angle), 0, 360, 255, -1,
-        )
-        inside = roi[filled > 0]
-        if inside.size < 12:
-            continue
-        ring = np.zeros(roi.shape, np.uint8)
-        cv2.ellipse(
-            ring, (gx, gy),
-            (max(1, int(round(axis_u / 2)) + 6), max(1, int(round(axis_v / 2)) + 6)),
-            float(angle), 0, 360, 255, -1,
-        )
-        ring[filled > 0] = 0
-        outside = roi[ring > 0]
-        mean_in = float(inside.mean())
-        mean_out = float(outside.mean()) if outside.size else mean_in
-        gap = mean_out - mean_in
-        if gap < 40 or mean_in > 90:
-            continue
-        if previous is None and gap < 70:
-            continue
-        full_x = float(cx) + x0
-        full_y = float(cy) + y0
-        size_error = abs(np.log((axis_u * axis_v) / expected))
-        jump = 0.0
-        if previous is not None:
-            jump = (
-                (full_x - previous[0]) ** 2 + (full_y - previous[1]) ** 2
-            ) ** 0.5
-        rank = gap - 12.0 * size_error - (0.15 * max(0.0, jump - 20.0))
-        found.append((rank, jump, full_x, full_y, axis_u, axis_v, float(angle), gap))
-
-    if previous is not None and found:
-        found = [item for item in found if item[1] <= 60.0]
-    if not found:
-        return None, "Oval gelap tidak ditemukan."
-    best = max(found)
-
-    _rank, _jump, full_x, full_y, axis_u, axis_v, angle, gap = best
-    return {
-        "ellipse": ((full_x, full_y), (float(axis_u), float(axis_v)), angle),
-        "center": (full_x, full_y),
-        "score": float(np.clip(gap / 160.0, 0.0, 1.0)),
-        "ecc": None,
-        "refined": False,
-    }, "Oval gelap"
-
-
 class SidePinholeTracker(PinholeTracker):
-    """Pelacak samping: oval gelap di dalam daerah pencarian."""
+    """Pelacak samping: template matching multi-skala + ECC, plus penolak loncatan pusat."""
 
     MAX_JUMP = 42.0
 
     def __init__(self, reference_frame):
         super().__init__(reference_frame)
         self.last_center = None
-        self.misses = 0
 
     def detect(self, gray, p):
-        result, note = detect_dark_oval(gray, p, self.last_center)
+        result, note = super().detect(gray, p)
         if result is None:
-            self.misses += 1
-            if self.misses > 12:
-                self.last_center = None
-            return None, note
+            self.last_center = None
+            return result, note
 
         cx, cy = result["center"]
         if self.last_center is not None:
             dx = cx - self.last_center[0]
             dy = cy - self.last_center[1]
             jump = (dx * dx + dy * dy) ** 0.5
-            if jump > self.MAX_JUMP and result["score"] < 0.55:
-                self.misses += 1
-                if self.misses > 12:
-                    self.last_center = None
+            if jump > self.MAX_JUMP and result["score"] < 0.72:
+                self.last_center = None
                 return None, "Loncatan pusat terlalu besar."
 
-        self.misses = 0
         self.last_center = (cx, cy)
         return result, note
 

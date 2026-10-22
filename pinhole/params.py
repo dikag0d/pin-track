@@ -66,8 +66,8 @@ THREAD_SMOOTH_FIELDS = [
 
 # Piksel per 1 mm pada referensi 640 x 480. 0 = tampilkan piksel.
 # TOP: checkerboard 1 mm, 61.5 px mendatar dan 63.9 px menurun.
-# SIDE: hanya sumbu tegak sebagai Z. Foto 489 px tinggi, kotak tegak 61.8 px,
-# disetarakan ke tinggi 480 menjadi 60.7 px per mm.
+# SIDE: hanya sumbu tegak sebagai Z. Checkerboard 640×480, kotak tegak
+# median 69.3 px per 1 mm (calib/side_checkerboard.png).
 SCALE_FIELDS = [
     ("px_per_mm_x", "Piksel per mm X", 0.0, 500.0, 0.0, 0.1),
     ("px_per_mm_y", "Piksel per mm Y", 0.0, 500.0, 0.0, 0.1),
@@ -76,13 +76,15 @@ SCALE_FIELDS = [
 
 TOP_PX_PER_MM_X = 61.5
 TOP_PX_PER_MM_Y = 63.9
-SIDE_PX_PER_MM_Z = 60.7
+SIDE_PX_PER_MM_Z = 69.3
 
 # Oval ujung pada referensi 640 x 480. Lebar dikunci karena benang tidak berubah.
+# Across 8 px mengikuti benang ramping. Along 22 px diputar 90 derajat
+# supaya oval berdiri tegak, bukan memanjang mendatar.
 THREAD_OVAL_FIELDS = [
-    ("thread_oval_along", "Oval sepanjang benang", 1.0, 640.0, 12.0, 0.5),
-    ("thread_oval_across", "Lebar benang (oval)", 1.0, 480.0, 18.0, 0.5),
-    ("thread_oval_angle", "Sudut oval benang", -180.0, 180.0, 0.0, 0.5),
+    ("thread_oval_along", "Oval sepanjang benang", 1.0, 640.0, 22.0, 0.5),
+    ("thread_oval_across", "Lebar benang (oval)", 1.0, 480.0, 8.0, 0.5),
+    ("thread_oval_angle", "Sudut oval benang", -180.0, 180.0, 90.0, 0.5),
     ("thread_oval_cx", "Pratinjau oval X", 0.0, 640.0, 400.0, 0.5),
     ("thread_oval_cy", "Pratinjau oval Y", 0.0, 480.0, 230.0, 0.5),
 ]
@@ -142,6 +144,8 @@ DEFAULTS.update(
 )
 
 # Kalibrasi SIDE pada samples/side.webm, bukaan tabung ~t=15s.
+# Benang samping lebih tipis dan sering tertutup. HSV lebih longgar,
+# komponen boleh lebih rendah, dan celah kecil di sepanjang kawat disambung.
 SIDE_DEFAULTS = {
     **DEFAULTS,
     "min_match": 0.58,
@@ -162,6 +166,17 @@ SIDE_DEFAULTS = {
     "ry0": 0.16,
     "rx1": 0.52,
     "ry1": 0.55,
+    "th_hmax": 28,
+    "th_smin": 40,
+    "th_vmin": 30,
+    "th_vmax": 210,
+    "thread_min_area": 40,
+    "thread_min_width": 12,
+    "thread_max_top": 0.99,
+    "thread_close_w": 15,
+    "thread_cover_gap": 48,
+    "thread_min_body": 2.0,
+    "thread_tip_floor": 1.5,
 }
 
 

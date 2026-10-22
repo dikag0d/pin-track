@@ -450,7 +450,7 @@ class CameraPane(QGroupBox):
             "TOP memakai X dan Y. SIDE hanya Z dari piksel tegak. "
             "Isian di atas gambar memakai angka yang sama. "
             "0 menampilkan piksel. "
-            "TOP bawaan: X 61.5, Y 63.9. SIDE bawaan: Z 60.7."
+            "TOP bawaan: X 61.5, Y 63.9. SIDE bawaan: Z 69.3."
         )
         scale_note.setWordWrap(True)
         tracking_form.addRow(scale_note)
@@ -775,7 +775,9 @@ class CameraPane(QGroupBox):
 
             signature = self.source_signature()
             if signature != self.previous_source:
-                if self.role != "side" or not SIDE_REFERENCE.is_file():
+                # File video: template matching memotong template dari frame
+                # video itu. Gambar kalibrasi samping tetap untuk kamera.
+                if isinstance(source, str) or self.role != "side" or not SIDE_REFERENCE.is_file():
                     self.reference = None
                 self.previous_source = signature
 
@@ -1219,14 +1221,14 @@ class CameraPane(QGroupBox):
         height, width = packet["raw"].shape[:2]
         body = float(thread.get("body_thickness") or thread["local_thickness"])
         across = body * 480.0 / height
-        along = float(np.clip(across * 0.6, 6.0, 120.0))
+        along = float(np.clip(max(across * 2.5, 16.0), 8.0, 160.0))
         tip_x, tip_y = thread["tip"]
         p = self.parameters()
         p.update(
             thread_oval_lock=True,
             thread_oval_across=across,
             thread_oval_along=along,
-            thread_oval_angle=float(thread["angle"]),
+            thread_oval_angle=90.0,
             thread_oval_cx=float(tip_x) * 640.0 / width,
             thread_oval_cy=float(tip_y) * 480.0 / height,
         )

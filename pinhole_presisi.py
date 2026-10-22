@@ -5,7 +5,7 @@ Membutuhkan numpy, opencv-python, ffmpeg/ffprobe.
 Jalankan:
     python pinhole_presisi.py samples/side.webm hasil.mp4
 
-Oval lubang adalah daerah gelap di dalam logam terang, di kotak pencarian
+Oval lubang mengikuti template matching multi-skala + ECC di kotak pencarian
 SIDE. Bukan ukuran metrologi. Kalibrasi ulang di GUI jika kamera berubah.
 """
 

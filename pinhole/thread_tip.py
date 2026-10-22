@@ -7,6 +7,10 @@ penutupan morfologi supaya kernel tidak menggeser ujung.
 Saat ujung diam, koordinat diratakan. Saat perpindahan melewati radius
 diam, marker langsung mengikuti pengukuran baru.
 
+Pada SIDE, pecahan kawat tipis yang sebaris disambung bila ada bagian
+yang tertutup. Ujung tetap diukur pada piksel yang terlihat, bukan pada
+isi celah.
+
 Ukuran oval ujung dikunci ke kalibrasi: lebar benang tidak berubah,
 yang mengikuti pengukuran hanya posisi (dan sudut saat kunci mati).
 """
@@ -66,6 +70,7 @@ class BrownThreadTipTracker:
         self.smooth_angle = 0.0
         self.missed = 0
         self.from_right = True
+        self.row_lock = False
 
     def reset(self):
         self.prev_raw = None
@@ -88,18 +93,30 @@ class BrownThreadTipTracker:
     def _masks(self, frame, p):
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         opened = _hsv_range(hsv, p)
-        opened = cv2.morphologyEx(opened, cv2.MORPH_OPEN, OPEN_KERNEL)
-        closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, CLOSE_KERNEL)
+        # Benang samping setebal 1 px hilang oleh opening 2x2. Di jalur itu
+        # cukup buang piksel yang tidak punya tetangga mendatar.
+        if int(p.get("thread_cover_gap", 0)) > 0:
+            kernel = np.ones((1, 2), np.uint8)
+        else:
+            kernel = OPEN_KERNEL
+        opened = cv2.morphologyEx(opened, cv2.MORPH_OPEN, kernel)
+        close_w = int(p.get("thread_close_w", 5))
+        if close_w == 5:
+            close_kernel = CLOSE_KERNEL
+        else:
+            close_w = int(np.clip(close_w, 1, 81))
+            close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (close_w, 3))
+        closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, close_kernel)
         return opened, closed
 
-    def _column_profile(self, binary):
+    def _column_profile(self, binary, min_length=MIN_PROFILE_LENGTH):
         ys, xs = np.where(binary > 0)
         if len(xs) == 0:
             return None
         x0 = int(xs.min())
         x1 = int(xs.max())
         length = x1 - x0 + 1
-        if length < MIN_PROFILE_LENGTH:
+        if length < min_length:
             return None
 
         relative = xs - x0
@@ -135,7 +152,10 @@ class BrownThreadTipTracker:
         return x0, smooth, thickness, thick
 
     def _measure_tip(self, opened, component, p):
-        profile = self._column_profile(cv2.bitwise_and(opened, component))
+        min_length = 12 if int(p.get("thread_cover_gap", 0)) > 0 else MIN_PROFILE_LENGTH
+        profile = self._column_profile(
+            cv2.bitwise_and(opened, component), min_length=min_length,
+        )
         if profile is None:
             return None
         x0, centerline, thickness, raw_thick = profile
@@ -147,11 +167,12 @@ class BrownThreadTipTracker:
         if len(body) < 4:
             return None
         body_thickness = float(np.median(body))
-        if body_thickness < MIN_BODY_THICKNESS:
+        min_body = float(p.get("thread_min_body", MIN_BODY_THICKNESS))
+        if body_thickness < min_body:
             return None
 
         threshold = max(
-            THRESHOLD_FLOOR,
+            float(p.get("thread_tip_floor", THRESHOLD_FLOOR)),
             float(p["thread_tip_ratio"]) * body_thickness,
         )
         hit = None
@@ -174,7 +195,13 @@ class BrownThreadTipTracker:
         shaft_x = tip_index + np.arange(SHAFT_START, SHAFT_END)
         shaft_x = shaft_x[(shaft_x >= 1.0) & (shaft_x <= length - 2.0)]
         if len(shaft_x) < 8:
-            return None
+            # Kawat pendek yang tertutup tidak punya poros 42 px.
+            # Hanya dipakai bila jendela bawaan gagal, jadi benang panjang tidak berubah.
+            short = tip_index + np.arange(3.0, 24.0)
+            short = short[(short >= 1.0) & (short <= length - 2.0)]
+            if len(short) < 5:
+                return None
+            shaft_x = short
         shaft_y = np.interp(shaft_x, columns, centerline)
         slope = float(np.polyfit(shaft_x, shaft_y, 1)[0])
         if abs(slope) > MAX_SLOPE:
@@ -207,6 +234,11 @@ class BrownThreadTipTracker:
         }
 
     def _candidates(self, opened, closed, p):
+        if int(p.get("thread_cover_gap", 0)) > 0:
+            return self._covered_candidates(opened, closed, p)
+        return self._separate_candidates(opened, closed, p)
+
+    def _separate_candidates(self, opened, closed, p):
         height, width = closed.shape
         count, labels, stats, _centroids = cv2.connectedComponentsWithStats(closed)
         min_area = float(p["thread_min_area"])
@@ -232,9 +264,112 @@ class BrownThreadTipTracker:
             found.append(measured)
         return found
 
+    def _covered_candidates(self, opened, closed, p):
+        """Sambung pecahan kawat tipis yang sebaris, melewati bagian tertutup.
+
+        Titik ukur tetap pada piksel opened, jadi penutup celah tidak
+        menggeser ujung bebas. Bongkahan pendek yang gemuk (bukan kawat)
+        dibuang. Rantai yang menyentuh tepi masuk diutamakan.
+        """
+        height, width = closed.shape
+        count, labels, stats, _centroids = cv2.connectedComponentsWithStats(closed)
+        min_area = max(20.0, float(p["thread_min_area"]) * 0.5)
+        min_width = max(8, int(p["thread_min_width"]) // 2)
+        min_right = int(float(p["thread_min_right_x"]) * width)
+        max_top = int(float(p["thread_max_top"]) * height)
+        cover = int(p.get("thread_cover_gap", 0))
+        fragments = []
+        for label in range(1, count):
+            x, y, bw, bh, area = (int(v) for v in stats[label])
+            if area < min_area or bw < min_width or y > max_top:
+                continue
+            if bw < bh * 2.4 and bw < 80:
+                continue
+            band = labels[y:y + bh, x:x + bw] == label
+            row_counts = band.sum(axis=1)
+            cy = float(y + int(np.argmax(row_counts)))
+            fragments.append({
+                "label": label,
+                "x": x,
+                "y": y,
+                "bw": bw,
+                "bh": bh,
+                "area": int(area),
+                "cy": cy,
+                "x1": x + bw,
+            })
+        if not fragments:
+            return []
+        fragments.sort(key=lambda item: item["x"])
+        parent = list(range(len(fragments)))
+
+        def find(index):
+            while parent[index] != index:
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            return index
+
+        def union(left, right):
+            ra, rb = find(left), find(right)
+            if ra != rb:
+                parent[rb] = ra
+
+        for i, left in enumerate(fragments):
+            for j in range(i + 1, len(fragments)):
+                right = fragments[j]
+                gap = right["x"] - left["x1"]
+                if gap > cover:
+                    break
+                if gap < -8:
+                    continue
+                if abs(left["cy"] - right["cy"]) <= 6.0:
+                    union(i, j)
+
+        groups = {}
+        for index in range(len(fragments)):
+            groups.setdefault(find(index), []).append(fragments[index])
+
+        found = []
+        entry_x = width - 16
+        for members in groups.values():
+            x0 = min(item["x"] for item in members)
+            x1 = max(item["x1"] for item in members)
+            if x1 < min_right or (x1 - x0) < int(p["thread_min_width"]):
+                continue
+            component = np.zeros_like(closed)
+            for item in members:
+                component[labels == item["label"]] = 255
+            measured = self._measure_tip(opened, component, p)
+            if measured is None:
+                continue
+            if measured["body_thickness"] > 16.0 and (x1 - x0) < 80:
+                continue
+            area = float(sum(item["area"] for item in members))
+            y0 = min(item["y"] for item in members)
+            y1 = max(item["y"] + item["bh"] for item in members)
+            measured["area"] = area
+            measured["bbox"] = (x0, y0, x1 - x0, y1 - y0)
+            measured["score"] = area + 2.0 * (x1 - x0)
+            if x1 >= entry_x:
+                measured["score"] += 400.0
+            found.append(measured)
+        return found
+
     def _choose(self, found):
         if not found:
             return None
+        if (
+            self.row_lock
+            and self.prev_raw is not None
+            and self.missed <= MISS_DROP_TRACK
+        ):
+            py = float(self.prev_raw[1])
+            same_row = [
+                item for item in found if abs(item["tip"][1] - py) <= 14.0
+            ]
+            best_score = max(item["score"] for item in found)
+            if same_row and max(item["score"] for item in same_row) >= 0.35 * best_score:
+                found = same_row
         best = max(found, key=lambda item: item["score"])
         if self.prev_raw is None or self.missed > MISS_DROP_TRACK:
             return best
@@ -321,6 +456,7 @@ class BrownThreadTipTracker:
         working = frame if from_right else cv2.flip(frame, 1)
         opened, closed = self._masks(working, p)
         display = opened if from_right else cv2.flip(opened, 1)
+        self.row_lock = int(p.get("thread_cover_gap", 0)) > 0
 
         chosen = self._choose(self._candidates(opened, closed, p))
         if chosen is None:
@@ -493,24 +629,11 @@ def format_tip_xy(
     )
 
 
-def tip_marker_radius(thread) -> int:
-    """Jari-jari satu lingkaran ujung, mengikuti tebal jalur benang."""
-    ellipse = thread.get("tip_ellipse")
-    if ellipse is not None:
-        try:
-            _x0, y0, _x1, y1 = _span(ellipse_points(ellipse))
-            return max(4, int(round((y1 - y0) / 2.0)))
-        except (TypeError, ValueError, cv2.error):
-            pass
-    thickness = thread.get("body_thickness") or thread.get("local_thickness") or 8
-    return max(4, int(round(float(thickness) / 2.0)))
-
-
 def draw_insertion_overlay(frame, pinhole, thread, from_right=True):
     """Garis putus-putus jalur jarum (hijau) dan jalur benang (kuning).
 
     Garis tegak hijau adalah sisi lubang yang menghadap benang.
-    Ujung sendiri digambar sekali sebagai lingkaran di draw_thread.
+    Ujung sendiri digambar sekali sebagai oval ramping di draw_thread.
     """
     out = frame.copy()
     height, width = out.shape[:2]
@@ -551,16 +674,19 @@ def draw_thread(
     frame, thread, enabled=True, px_per_mm_x=0.0, px_per_mm_y=0.0,
     px_per_mm_z=0.0,
 ):
-    """Gambar satu lingkaran ujung, silang, dan koordinat dalam mm bila skala ada."""
+    """Gambar oval ramping di ujung, silang, dan koordinat dalam mm bila skala ada."""
     if not enabled:
         return frame
     out = frame.copy()
     if thread is not None:
         tip_x, tip_y = thread["tip"]
         tip = (int(round(tip_x)), int(round(tip_y)))
-        radius = tip_marker_radius(thread)
-        if 0 <= tip[0] < out.shape[1] and 0 <= tip[1] < out.shape[0]:
-            cv2.circle(out, tip, radius, THREAD_PATH_COLOR, 2, cv2.LINE_AA)
+        try:
+            cv2.ellipse(
+                out, thread["tip_ellipse"], THREAD_PATH_COLOR, 2, cv2.LINE_AA,
+            )
+        except cv2.error:
+            pass
         cv2.drawMarker(
             out, tip, (0, 0, 255), cv2.MARKER_CROSS, 16, 1, cv2.LINE_AA
         )
