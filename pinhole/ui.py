@@ -1219,7 +1219,7 @@ class CameraPane(QGroupBox):
         height, width = packet["raw"].shape[:2]
         body = float(thread.get("body_thickness") or thread["local_thickness"])
         across = body * 480.0 / height
-        along = float(np.clip(across * 0.6, 6.0, 120.0))
+        along = float(np.clip(max(across * 2.5, 16.0), 8.0, 160.0))
         tip_x, tip_y = thread["tip"]
         p = self.parameters()
         p.update(

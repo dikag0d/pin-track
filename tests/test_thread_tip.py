@@ -107,7 +107,9 @@ class ThreadTipTest(unittest.TestCase):
         self.assertTrue(merged["thread_oval_lock"])
         self.assertEqual(merged["th_hmax"], 22)
         self.assertAlmostEqual(merged["thread_still_radius"], 3.2)
-        self.assertAlmostEqual(merged["thread_oval_across"], 18.0)
+        self.assertAlmostEqual(merged["thread_oval_across"], 8.0)
+        self.assertAlmostEqual(merged["thread_oval_along"], 22.0)
+        self.assertLess(merged["thread_oval_across"], merged["thread_oval_along"])
 
     def test_rejects_inverted_smooth_radius(self):
         p = defaults_for("side")
@@ -323,8 +325,9 @@ class InsertionPathTest(unittest.TestCase):
         self.assertGreater(int(outside[70:90, 10:280, 2].max()), 150)
         self.assertGreater(int(aligned[70:90, 10:200, 1].max()), 150)
 
-    def test_marker_is_one_circle_and_xy_has_no_comma(self):
-        thread = _thread(tip=(420.4, 220.6), across=20.0)
+    def test_marker_is_a_slim_oval_and_xy_has_no_comma(self):
+        thread = _thread(tip=(420.4, 220.6), across=8.0)
+        thread["tip_ellipse"] = ((420.4, 220.6), (22.0, 8.0), 0.0)
         self.assertEqual(format_tip_xy(*thread["tip"]), "X 420 Y 221")
         self.assertNotIn(",", format_tip_xy(*thread["tip"]))
         one_mm = format_xy(
@@ -352,12 +355,13 @@ class InsertionPathTest(unittest.TestCase):
             (out[:, :, 1] > 200) & (out[:, :, 2] > 200) & (out[:, :, 0] < 80)
         )
         yellow[:80, :] = False
-        self.assertTrue(bool(yellow[220, 410]))
-        self.assertFalse(bool(yellow[220, 414]))
         ys, xs = np.where(yellow)
-        radius = np.hypot(xs - 420.4, ys - 220.6)
-        self.assertGreater(float(np.median(radius)), 8.0)
-        self.assertLess(float(np.median(radius)), 12.0)
+        self.assertGreater(len(xs), 0)
+        width = float(xs.max() - xs.min())
+        height = float(ys.max() - ys.min())
+        self.assertGreater(width, height + 6.0)
+        self.assertGreater(width, 16.0)
+        self.assertLess(height, 14.0)
 
 
 class ThreadGuiTest(unittest.TestCase):

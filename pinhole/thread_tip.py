@@ -493,24 +493,11 @@ def format_tip_xy(
     )
 
 
-def tip_marker_radius(thread) -> int:
-    """Jari-jari satu lingkaran ujung, mengikuti tebal jalur benang."""
-    ellipse = thread.get("tip_ellipse")
-    if ellipse is not None:
-        try:
-            _x0, y0, _x1, y1 = _span(ellipse_points(ellipse))
-            return max(4, int(round((y1 - y0) / 2.0)))
-        except (TypeError, ValueError, cv2.error):
-            pass
-    thickness = thread.get("body_thickness") or thread.get("local_thickness") or 8
-    return max(4, int(round(float(thickness) / 2.0)))
-
-
 def draw_insertion_overlay(frame, pinhole, thread, from_right=True):
     """Garis putus-putus jalur jarum (hijau) dan jalur benang (kuning).
 
     Garis tegak hijau adalah sisi lubang yang menghadap benang.
-    Ujung sendiri digambar sekali sebagai lingkaran di draw_thread.
+    Ujung sendiri digambar sekali sebagai oval ramping di draw_thread.
     """
     out = frame.copy()
     height, width = out.shape[:2]
@@ -551,16 +538,19 @@ def draw_thread(
     frame, thread, enabled=True, px_per_mm_x=0.0, px_per_mm_y=0.0,
     px_per_mm_z=0.0,
 ):
-    """Gambar satu lingkaran ujung, silang, dan koordinat dalam mm bila skala ada."""
+    """Gambar oval ramping di ujung, silang, dan koordinat dalam mm bila skala ada."""
     if not enabled:
         return frame
     out = frame.copy()
     if thread is not None:
         tip_x, tip_y = thread["tip"]
         tip = (int(round(tip_x)), int(round(tip_y)))
-        radius = tip_marker_radius(thread)
-        if 0 <= tip[0] < out.shape[1] and 0 <= tip[1] < out.shape[0]:
-            cv2.circle(out, tip, radius, THREAD_PATH_COLOR, 2, cv2.LINE_AA)
+        try:
+            cv2.ellipse(
+                out, thread["tip_ellipse"], THREAD_PATH_COLOR, 2, cv2.LINE_AA,
+            )
+        except cv2.error:
+            pass
         cv2.drawMarker(
             out, tip, (0, 0, 255), cv2.MARKER_CROSS, 16, 1, cv2.LINE_AA
         )
