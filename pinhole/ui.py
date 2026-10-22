@@ -775,7 +775,9 @@ class CameraPane(QGroupBox):
 
             signature = self.source_signature()
             if signature != self.previous_source:
-                if self.role != "side" or not SIDE_REFERENCE.is_file():
+                # File video: template matching memotong template dari frame
+                # video itu. Gambar kalibrasi samping tetap untuk kamera.
+                if isinstance(source, str) or self.role != "side" or not SIDE_REFERENCE.is_file():
                     self.reference = None
                 self.previous_source = signature
 
