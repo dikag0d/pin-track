@@ -83,6 +83,7 @@ class ThreadTipTest(unittest.TestCase):
             self.assertTrue(p["thread_from_right"])
             self.assertEqual(p["th_hmin"], 0)
             self.assertAlmostEqual(p["thread_tip_ratio"], 0.30)
+            self.assertAlmostEqual(p["thread_oval_angle"], 90.0)
             self.assertAlmostEqual(p["thread_still_radius"], 3.2)
             self.assertAlmostEqual(p["thread_quiet_radius"], 1.6)
 
@@ -116,6 +117,7 @@ class ThreadTipTest(unittest.TestCase):
         self.assertAlmostEqual(merged["thread_still_radius"], 3.2)
         self.assertAlmostEqual(merged["thread_oval_across"], 8.0)
         self.assertAlmostEqual(merged["thread_oval_along"], 22.0)
+        self.assertAlmostEqual(merged["thread_oval_angle"], 90.0)
         self.assertLess(merged["thread_oval_across"], merged["thread_oval_along"])
 
     def test_rejects_inverted_smooth_radius(self):
@@ -395,6 +397,28 @@ class InsertionPathTest(unittest.TestCase):
         self.assertGreater(width, 16.0)
         self.assertLess(height, 14.0)
 
+    def test_locked_default_oval_stands_vertical(self):
+        p = defaults_for("side")
+        result, _mask = BrownThreadTipTracker().detect(make_thread_frame(), p)
+        (_cx, _cy), axes, angle = result["tip_ellipse"]
+        self.assertTrue(result["oval_locked"])
+        self.assertAlmostEqual(angle, 90.0)
+        self.assertAlmostEqual(axes[0], 22.0)
+        self.assertAlmostEqual(axes[1], 8.0)
+        blank = np.full((480, 640, 3), 30, np.uint8)
+        out = draw_thread(blank, result)
+        yellow = (
+            (out[:, :, 1] > 200) & (out[:, :, 2] > 200) & (out[:, :, 0] < 80)
+        )
+        yellow[:80, :] = False
+        ys, xs = np.where(yellow)
+        self.assertGreater(len(xs), 0)
+        width = float(xs.max() - xs.min())
+        height = float(ys.max() - ys.min())
+        self.assertGreater(height, width + 6.0)
+        self.assertGreater(height, 16.0)
+        self.assertLess(width, 14.0)
+
 
 class ThreadGuiTest(unittest.TestCase):
     @classmethod
@@ -522,9 +546,7 @@ class ThreadGuiTest(unittest.TestCase):
             self.assertAlmostEqual(
                 locked["thread_oval_across"], thread["body_thickness"], places=4
             )
-            self.assertAlmostEqual(
-                locked["thread_oval_angle"], thread["angle"], delta=0.001
-            )
+            self.assertAlmostEqual(locked["thread_oval_angle"], 90.0)
             self.assertTrue(locked["thread_oval_lock"])
             fitted, _mask = BrownThreadTipTracker().detect(frame, locked)
             pane.packet["thread"] = fitted

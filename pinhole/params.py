@@ -79,12 +79,12 @@ TOP_PX_PER_MM_Y = 63.9
 SIDE_PX_PER_MM_Z = 69.3
 
 # Oval ujung pada referensi 640 x 480. Lebar dikunci karena benang tidak berubah.
-# Across 8 px mengikuti benang ramping di rekaman samping. Along lebih panjang
-# supaya oval memanjang di sepanjang benang, bukan tegak dan gemuk.
+# Across 8 px mengikuti benang ramping. Along 22 px diputar 90 derajat
+# supaya oval berdiri tegak, bukan memanjang mendatar.
 THREAD_OVAL_FIELDS = [
     ("thread_oval_along", "Oval sepanjang benang", 1.0, 640.0, 22.0, 0.5),
     ("thread_oval_across", "Lebar benang (oval)", 1.0, 480.0, 8.0, 0.5),
-    ("thread_oval_angle", "Sudut oval benang", -180.0, 180.0, 0.0, 0.5),
+    ("thread_oval_angle", "Sudut oval benang", -180.0, 180.0, 90.0, 0.5),
     ("thread_oval_cx", "Pratinjau oval X", 0.0, 640.0, 400.0, 0.5),
     ("thread_oval_cy", "Pratinjau oval Y", 0.0, 480.0, 230.0, 0.5),
 ]

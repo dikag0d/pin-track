@@ -1228,7 +1228,7 @@ class CameraPane(QGroupBox):
             thread_oval_lock=True,
             thread_oval_across=across,
             thread_oval_along=along,
-            thread_oval_angle=float(thread["angle"]),
+            thread_oval_angle=90.0,
             thread_oval_cx=float(tip_x) * 640.0 / width,
             thread_oval_cy=float(tip_y) * 480.0 / height,
         )
