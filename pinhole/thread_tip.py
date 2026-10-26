@@ -5,11 +5,13 @@ Benang masuk dari satu tepi gambar. Yang dilacak adalah ujung bebasnya
 penutupan morfologi supaya kernel tidak menggeser ujung.
 
 Saat ujung diam, koordinat diratakan. Saat perpindahan melewati radius
-diam, marker langsung mengikuti pengukuran baru.
+diam, marker langsung mengikuti pengukuran baru. Pada SIDE langkah
+besar tetap diratakan supaya ujung yang pudar tidak meloncat.
 
 Pada SIDE, pecahan kawat tipis yang sebaris disambung bila ada bagian
 yang tertutup. Ujung tetap diukur pada piksel yang terlihat, bukan pada
-isi celah.
+isi celah. Loncatan satu frame ditahan, dan baris yang lebih terang
+tidak mengambil alih benang.
 
 Ukuran oval ujung dikunci ke kalibrasi: lebar benang tidak berubah,
 yang mengikuti pengukuran hanya posisi (dan sudut saat kunci mati).
@@ -71,6 +73,12 @@ class BrownThreadTipTracker:
         self.missed = 0
         self.from_right = True
         self.row_lock = False
+        self.pending_tip = None
+        self.locked_gray = None
+        self.last_thin = None
+        self.coast = 0
+        self.arm_count = 0
+        self.arm_tip = None
 
     def reset(self):
         self.prev_raw = None
@@ -78,6 +86,12 @@ class BrownThreadTipTracker:
         self.smooth_thickness = None
         self.smooth_angle = 0.0
         self.missed = 0
+        self.pending_tip = None
+        self.locked_gray = None
+        self.last_thin = None
+        self.coast = 0
+        self.arm_count = 0
+        self.arm_tip = None
 
     def preview_mask(self, frame, p):
         """Mask opened pada koordinat gambar, untuk tampilan kalibrasi.
@@ -233,10 +247,316 @@ class BrownThreadTipTracker:
             "angle": angle,
         }
 
-    def _candidates(self, opened, closed, p):
+    def _candidates(self, opened, closed, p, frame=None):
+        if int(p.get("thread_cover_gap", 0)) > 0 and frame is not None:
+            return self._side_candidates(opened, closed, p, frame)
         if int(p.get("thread_cover_gap", 0)) > 0:
             return self._covered_candidates(opened, closed, p)
         return self._separate_candidates(opened, closed, p)
+
+    def _side_candidates(self, opened, closed, p, frame):
+        """Pilih ujung cokelat tipis, atau ujung bebas benang yang gemuk.
+
+        Punggung tipis mencapai ujung yang pudar. Pada benang gemuk punggung
+        itu hanya batas badan, jadi ujung bebas diambil dari mask jenuh
+        bila titik itu lebih ke kiri dan lebih tebal. Saat punggung hilang
+        sesaat, jejak yang sudah ada tidak meloncat ke pecahan mask.
+        """
+        found = self._thin_ridge_candidates(frame, p)
+        previous = self.prev_raw if self.missed <= MISS_DROP_TRACK else None
+        live = previous is not None
+        if live and found:
+            same_row = [
+                item for item in found
+                if abs(float(item["tip"][1]) - float(previous[1])) <= 12.0
+            ]
+            found = same_row
+        thin = max(found, key=lambda item: item["score"]) if found else None
+        if thin is not None:
+            covered = self._covered_candidates(opened, closed, p)
+            thick = self._thicker_free_end(thin, covered)
+            chosen = thick if thick is not None else thin
+        elif live:
+            coasted = self._coast_candidate()
+            return [coasted] if coasted is not None else []
+        else:
+            covered = self._covered_candidates(opened, closed, p)
+            thick = [
+                item for item in covered if float(item["body_thickness"]) >= 16.0
+            ]
+            if not thick:
+                self.arm_count = 0
+                self.arm_tip = None
+                return []
+            chosen = max(thick, key=lambda item: item["score"])
+        if not live and not self._arm(chosen["tip"]):
+            return []
+        chosen = self._with_median_gray(chosen, frame)
+        gated = self._gate_tip(chosen, previous)
+        self.coast = 0
+        self.last_thin = gated
+        return [gated]
+
+    def _thicker_free_end(self, thin, covered):
+        """Ujung mask jenuh bila itu benang gemuk, bukan badan yang terpotong."""
+        tip_x, tip_y = thin["tip"]
+        better = []
+        for item in covered:
+            if abs(float(item["tip"][1]) - float(tip_y)) > 12.0:
+                continue
+            if float(item["body_thickness"]) < 16.0:
+                continue
+            if float(item["tip"][0]) < float(tip_x) - 15.0:
+                better.append(item)
+        if not better:
+            return None
+        return max(better, key=lambda item: item["score"])
+
+    def _with_median_gray(self, chosen, frame):
+        if chosen.get("median_gray") is not None:
+            return chosen
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        x, y, bw, bh = chosen["bbox"]
+        height, width = gray.shape
+        x0 = max(0, int(x))
+        y0 = max(0, int(y))
+        x1 = min(width, x0 + max(int(bw), 1))
+        y1 = min(height, y0 + max(int(bh), 1))
+        patch = gray[y0:y1, x0:x1]
+        copied = dict(chosen)
+        if patch.size:
+            copied["median_gray"] = float(np.median(patch))
+        return copied
+
+    def _arm(self, tip):
+        """Terbitkan jejak baru setelah ujung yang sama terlihat tiga frame.
+
+        Garis logam yang hanya muncul sesaat tidak sempat mengunci baris.
+        """
+        tip_x, tip_y = float(tip[0]), float(tip[1])
+        if (
+            self.arm_tip is not None
+            and abs(tip_x - self.arm_tip[0]) <= 20.0
+            and abs(tip_y - self.arm_tip[1]) <= 8.0
+        ):
+            self.arm_count += 1
+        else:
+            self.arm_count = 1
+            self.arm_tip = (tip_x, tip_y)
+        return self.arm_count >= 3
+
+    def _coast_candidate(self):
+        if self.last_thin is None or self.prev_raw is None or self.coast >= 4:
+            return None
+        self.coast += 1
+        chosen = dict(self.last_thin)
+        tip = (float(self.prev_raw[0]), float(self.prev_raw[1]))
+        chosen["tip"] = tip
+        ellipse = chosen["tip_ellipse"]
+        chosen["tip_ellipse"] = (tip, ellipse[1], ellipse[2])
+        return chosen
+
+    def _left_visible_tip(self, columns, cover, min_run=8):
+        """Ujung kiri yang tersambung ke badan, melewati celah pendek.
+
+        Pecahan di bawah min_run tidak menjadi ujung. Celah di antara
+        ruas yang cukup panjang tetap disambung sampai batas cover.
+        """
+        present = np.flatnonzero(columns > 0)
+        if len(present) == 0:
+            return None
+        accepted = int(present.max())
+        gap = 0
+        run = []
+        for x in range(accepted, -1, -1):
+            if columns[x]:
+                run.append(x)
+                gap = 0
+                continue
+            if run and (len(run) >= min_run or run[0] >= accepted - 1):
+                accepted = run[-1]
+            run = []
+            gap += 1
+            if gap > cover:
+                break
+        if run and (len(run) >= min_run or run[0] >= accepted - 1):
+            accepted = run[-1]
+        return float(accepted)
+
+    def _thin_ridge_candidates(self, frame, p):
+        """Ujung benang SIDE pada punggung saturasi yang tipis.
+
+        Mask HSV jenuh memotong ujung cokelat yang S-nya rendah. Punggah
+        ini mengikuti benang sampai piksel cokelat terakhir, dan tepi
+        logam yang terang tidak dipilih.
+        """
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        hue = hsv[:, :, 0]
+        sat = hsv[:, :, 1].astype(np.int16)
+        val = hsv[:, :, 2]
+        height, width = sat.shape
+        h0, h1 = int(p["th_hmin"]), int(p["th_hmax"])
+        if h0 <= h1:
+            brown_h = (hue >= h0) & (hue <= h1)
+        else:
+            brown_h = (hue >= h0) | (hue <= h1)
+        faint_s = max(12, int(round(float(p["th_smin"]) * 0.30)))
+        brown = (
+            brown_h
+            & (sat >= faint_s)
+            & (val >= int(p["th_vmin"]))
+            & (val <= int(p["th_vmax"]))
+        )
+        offset = 6
+        margin = 6
+        ridge = np.zeros((height, width), np.uint8)
+        core = (
+            brown[offset:-offset]
+            & (sat[offset:-offset] >= sat[:-2 * offset] + margin)
+            & (sat[offset:-offset] >= sat[2 * offset:] + margin)
+        )
+        ridge[offset:-offset] = np.where(core, 255, 0).astype(np.uint8)
+        if int(ridge.max()) == 0:
+            return []
+
+        cover = int(p.get("thread_cover_gap", 48))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (cover + 1, 3))
+        linked = cv2.dilate(ridge, kernel)
+        count, labels, stats, _centroids = cv2.connectedComponentsWithStats(linked)
+        previous = self.prev_raw if self.missed <= MISS_DROP_TRACK else None
+        found = []
+        for label in range(1, count):
+            _x, _y, bw, _bh, _area = (int(v) for v in stats[label])
+            if bw < 40:
+                continue
+            region = (labels == label) & (ridge > 0)
+            ys, xs = np.where(region)
+            if len(xs) < 24:
+                continue
+            mode = int(np.bincount(ys).argmax())
+            band = np.abs(ys - mode) <= 2
+            xs = xs[band]
+            ys = ys[band]
+            # Benang masuk dari tepi kanan, tetapi ujung kanan bisa pudar
+            # beberapa piksel sebelum batas gambar.
+            if len(xs) < 20 or int(xs.max()) < width - 40:
+                continue
+            columns = np.zeros(width, np.uint8)
+            columns[xs] = 1
+            tip_x = self._left_visible_tip(columns, cover)
+            if tip_x is None:
+                continue
+            tip_x = int(tip_x)
+            if int(xs.max()) - tip_x < 50:
+                continue
+            near = (xs >= tip_x) & (xs <= tip_x + 3)
+            if not np.any(near):
+                near = np.abs(xs.astype(np.int32) - tip_x) <= 12
+            if np.any(near):
+                weights = np.clip(sat[ys[near], xs[near]].astype(np.float64), 1.0, None)
+                tip_y = float(np.average(ys[near].astype(np.float64), weights=weights))
+            elif previous is not None:
+                tip_y = float(previous[1])
+            else:
+                continue
+            med_g = float(np.median(gray[ys, xs]))
+            med_v = float(np.median(val[ys, xs]))
+            # Tepi logam lebih putih. Alur yang terlalu gelap juga bukan benang.
+            if med_g > 108.0 or med_v < 85.0:
+                continue
+            score = float(int(xs.max()) - tip_x)
+            # Benang cokelat hati lebih gelap daripada tepi logam yang ikut jenuh.
+            score += max(0.0, 160.0 - med_g) * 6.0
+            if previous is not None and abs(tip_y - float(previous[1])) <= 8.0:
+                score += 80.0
+            right = xs >= max(int(xs.max()) - 70, tip_x)
+            counts = np.bincount(xs[right], minlength=width)
+            present = counts[counts > 0]
+            body = float(np.median(present)) if len(present) else 2.0
+            local = float(np.clip(body, LOCAL_CLIP[0], LOCAL_CLIP[1]))
+            angle = self._ridge_angle(xs, ys, tip_x)
+            along = float(np.clip(local * ALONG_SCALE, ALONG_CLIP[0], ALONG_CLIP[1]))
+            found.append({
+                "tip": (float(tip_x), tip_y),
+                "tip_ellipse": ((float(tip_x), tip_y), (along, local), angle),
+                "local_thickness": local,
+                "body_thickness": max(body, 2.0),
+                "angle": angle,
+                "area": float(len(xs)),
+                "bbox": (
+                    int(tip_x),
+                    int(ys.min()),
+                    int(xs.max() - tip_x + 1),
+                    int(max(ys.max() - ys.min() + 1, 1)),
+                ),
+                "score": score,
+                "median_gray": med_g,
+            })
+        return found
+
+    def _gate_tip(self, chosen, previous):
+        """Ikuti gerak kecil. Perpanjangan dan mundur dibatasi per frame.
+
+        Baris lain tidak mengambil alih jejak yang sudah terkunci.
+        """
+        gated = dict(chosen)
+        tip_x, tip_y = (float(chosen["tip"][0]), float(chosen["tip"][1]))
+        accept = True
+        if previous is not None:
+            dx = tip_x - float(previous[0])
+            dy = tip_y - float(previous[1])
+            if abs(dy) > 12.0:
+                # Baris lain — tepi logam atau kilau — tidak mengambil alih.
+                accept = False
+                self.pending_tip = None
+                tip_x, tip_y = float(previous[0]), float(previous[1])
+            elif dx < -4.0:
+                # Ujung pudar maju pelan. Pengukuran yang sama dua frame
+                # boleh menyusul lebih cepat, tanpa meloncat penuh.
+                step = 16.0 if self._pending_agrees(tip_x, tip_y) else 4.0
+                tip_x = max(float(chosen["tip"][0]), float(previous[0]) - step)
+                self.pending_tip = (float(chosen["tip"][0]), float(chosen["tip"][1]))
+            elif dx > 4.0:
+                if self._pending_agrees(tip_x, tip_y):
+                    tip_x = min(float(chosen["tip"][0]), float(previous[0]) + 16.0)
+                    self.pending_tip = (float(chosen["tip"][0]), float(chosen["tip"][1]))
+                else:
+                    accept = False
+                    self.pending_tip = (float(chosen["tip"][0]), float(chosen["tip"][1]))
+                    tip_x, tip_y = float(previous[0]), float(previous[1])
+            else:
+                self.pending_tip = None
+        else:
+            self.pending_tip = None
+        if accept and chosen.get("median_gray") is not None:
+            self.locked_gray = float(chosen["median_gray"])
+        ellipse = gated["tip_ellipse"]
+        gated["tip"] = (float(tip_x), float(tip_y))
+        gated["tip_ellipse"] = ((float(tip_x), float(tip_y)), ellipse[1], ellipse[2])
+        return gated
+
+    def _pending_agrees(self, tip_x, tip_y):
+        pending = self.pending_tip
+        if pending is None:
+            return False
+        return (
+            abs(float(pending[0]) - float(tip_x)) <= 10.0
+            and abs(float(pending[1]) - float(tip_y)) <= 6.0
+        )
+
+    def _ridge_angle(self, xs, ys, tip_x):
+        right = xs >= max(tip_x + 12, int(xs.max()) - 80)
+        if int(right.sum()) < 8:
+            return 0.0
+        slope = float(np.polyfit(
+            xs[right].astype(np.float64),
+            ys[right].astype(np.float64),
+            1,
+        )[0])
+        if not np.isfinite(slope) or abs(slope) > MAX_SLOPE:
+            return 0.0
+        return float(np.degrees(np.arctan(slope)))
 
     def _separate_candidates(self, opened, closed, p):
         height, width = closed.shape
@@ -405,9 +725,16 @@ class BrownThreadTipTracker:
                 step = float(np.hypot(*(raw - self.prev_raw)))
             else:
                 step = 99.0
+            still_radius = float(p["thread_still_radius"])
+            # Ujung SIDE yang pudar bergeser beberapa piksel antar frame.
+            # Loncatan yang sudah lolos gate tetap diratakan, bukan ditempelkan.
+            if int(p.get("thread_cover_gap", 0)) > 0:
+                still_radius = max(still_radius, 8.0)
             if step <= float(p["thread_quiet_radius"]):
                 alpha = float(p["thread_quiet_alpha"])
-            elif step <= float(p["thread_still_radius"]):
+            elif step <= still_radius:
+                alpha = float(p["thread_still_alpha"])
+            elif int(p.get("thread_cover_gap", 0)) > 0:
                 alpha = float(p["thread_still_alpha"])
             else:
                 alpha = 1.0
@@ -458,13 +785,17 @@ class BrownThreadTipTracker:
         display = opened if from_right else cv2.flip(opened, 1)
         self.row_lock = int(p.get("thread_cover_gap", 0)) > 0
 
-        chosen = self._choose(self._candidates(opened, closed, p))
+        chosen = self._choose(self._candidates(opened, closed, p, working))
         if chosen is None:
             self.missed += 1
             if self.missed > MISS_DROP_TRACK:
                 self.prev_raw = None
                 self.smooth = None
                 self.smooth_thickness = None
+                self.last_thin = None
+                self.locked_gray = None
+                self.pending_tip = None
+                self.coast = 0
             return None, display
 
         tip_x, tip_y, local, angle = self._stabilize(

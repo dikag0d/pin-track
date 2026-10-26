@@ -2,9 +2,9 @@
 GUI dua sumber kamera/video untuk pelacakan pinhole.
 
 Jalankan:
-    python pinhole_gui.py --side samples/side.webm --top top.webm
+    python pinhole_gui.py --side samples/side_train.mp4 --top top.webm
 
-Kiri  SIDE: template matching + ECC, kalibrasi samples/side.webm.
+Kiri  SIDE: template matching + ECC, template dari samples/side_train.mp4.
 Kanan TOP: template matching multi-skala + ECC affine (algoritme tidak diubah).
 Keduanya juga melacak ujung bebas benang coklat (tab Benang).
 

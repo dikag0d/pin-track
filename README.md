@@ -26,7 +26,7 @@ python -m pip install -r requirements.txt
 ## GUI
 
 ```bash
-python pinhole_gui.py --side samples/side.webm --top top.webm
+python pinhole_gui.py --side samples/side_train.mp4 --top top.webm
 ```
 
 - Mulai masing-masing panel, atau kamera V4L2.
@@ -37,9 +37,9 @@ python pinhole_gui.py --side samples/side.webm --top top.webm
 
 ## Ujung benang
 
-Kedua panel melacak ujung bebas benang coklat/tembaga yang masuk dari tepi gambar. Titik ukur subpiksel ada di mask sebelum penutupan morfologi, jadi kernel tidak menggeser ujung. Pada SIDE, kawat yang tipis sering tertutup: pecahan sebaris disambung sampai celah 48 px, sementara ujung tetap diukur pada piksel benang yang terlihat.
+Kedua panel melacak ujung bebas benang coklat/tembaga yang masuk dari tepi gambar. Titik ukur subpiksel ada di mask sebelum penutupan morfologi, jadi kernel tidak menggeser ujung. Pada SIDE, kawat yang tipis sering tertutup: pecahan sebaris disambung sampai celah 48 px, sementara ujung tetap diukur pada piksel benang yang terlihat. Ujung yang dicari adalah benang cokelat yang gelap, bukan tepi logam yang lebih terang. Saat aplikasi dibuka, sumber SIDE bawaan adalah `samples/side_train.mp4`; template lubang dipotong dari frame pertama video itu.
 
-Saat perpindahan di bawah radius diam (default 3.2 px/frame, dan 1.6 px untuk perataan lebih kuat), koordinat diratakan supaya marker tidak bergetar. Di atas radius itu, marker langsung mengikuti pengukuran baru.
+Saat perpindahan di bawah radius diam (default 3.2 px/frame, dan 1.6 px untuk perataan lebih kuat), koordinat diratakan supaya marker tidak bergetar. Di atas radius itu, panel TOP langsung mengikuti pengukuran baru. Panel SIDE menggeser ujung pelan: 4 px pada frame pertama, lalu paling banyak 16 px per frame bila ujung yang sama terukur lagi.
 
 | Konstanta | Default |
 | --- | --- |
@@ -60,7 +60,7 @@ Jika `top.webm` belum ada, isi path di panel kanan atau biarkan kosong sampai ad
 ## Batch SIDE
 
 ```bash
-python pinhole_presisi.py samples/side.webm hasil.mp4
+python pinhole_presisi.py samples/side_train.mp4 hasil.mp4
 ```
 
 Menulis `hasil.mp4` dan `hasil.json`. CLI memakai template matching yang sama dengan panel SIDE.

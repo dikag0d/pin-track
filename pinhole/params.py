@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SIDE_REFERENCE = ROOT / "calib" / "reference_side.png"
-SIDE_SAMPLE = ROOT / "samples" / "side.webm"
+SIDE_SAMPLE = ROOT / "samples" / "side_train.mp4"
 
 # key, label, minimum, maksimum, default, langkah
 IMAGE_FIELDS = [
@@ -143,7 +143,8 @@ DEFAULTS.update(
     video_zoom_factor=1.0,
 )
 
-# Kalibrasi SIDE pada samples/side.webm, bukaan tabung ~t=15s.
+# Kalibrasi lubang SIDE. Saat aplikasi jalan, template dipotong dari
+# frame pertama samples/side_train.mp4. Bukaan tabung tetap di koordinat ini.
 # Benang samping lebih tipis dan sering tertutup. HSV lebih longgar,
 # komponen boleh lebih rendah, dan celah kecil di sepanjang kawat disambung.
 SIDE_DEFAULTS = {
