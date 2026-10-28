@@ -98,24 +98,3 @@ class SideTemplateTest(unittest.TestCase):
         self.assertIsNotNone(kept)
         self.assertGreater(kept["score"], 0.9)
         self.assertIn("TM", kept_note)
-
-    def test_side_tracker_locks_onto_the_round_iron_hole(self):
-        reference = _reference()
-        cv2.circle(reference, (140, 200), 16, (10, 10, 10), -1)
-        cv2.circle(reference, (140, 200), 22, (220, 220, 220), 2)
-        params = defaults_for("side")
-        gray = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
-        result, note = SidePinholeTracker(reference).detect(gray, params)
-        self.assertIsNotNone(result, note)
-        cx, cy = result["center"]
-        self.assertLess(abs(cx - 140), 14)
-        self.assertLess(abs(cy - 200), 14)
-        self.assertIn("bulat", note)
-
-        filled = reference.copy()
-        cv2.circle(filled, (140, 200), 20, (160, 160, 160), -1)
-        missing, missing_note = SidePinholeTracker(reference).detect(
-            cv2.cvtColor(filled, cv2.COLOR_BGR2GRAY), params,
-        )
-        self.assertIsNone(missing)
-        self.assertIn("bulat", missing_note)

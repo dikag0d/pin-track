@@ -348,163 +348,20 @@ class PinholeTracker:
         return result, "TM + ECC" if refined else "TM; tanpa penyempurnaan ECC"
 
 
-def _round_iron_hole(gray, bounds):
-    """Pusat lubang bulat: bagian dalam gelap, dikelilingi besi yang lebih terang.
-
-    Mengembalikan (x, y, radius, skor) atau None. Radius adalah jari-jari
-    geometris, bukan diameter oval OpenCV.
-    """
-    height, width = gray.shape
-    x0 = max(0, int(bounds[0]))
-    y0 = max(0, int(bounds[1]))
-    x1 = min(width, int(bounds[2]))
-    y1 = min(height, int(bounds[3]))
-    if x1 - x0 < 36 or y1 - y0 < 36:
-        return None
-    roi = gray[y0:y1, x0:x1].astype(np.float32)
-    best = None
-    for radius in (10, 14, 18, 22, 26):
-        kernel = 2 * radius + 1
-        if kernel + 6 >= roi.shape[0] or kernel + 6 >= roi.shape[1]:
-            continue
-        inner = cv2.boxFilter(
-            roi, -1, (kernel, kernel), normalize=True, borderType=cv2.BORDER_REPLICATE,
-        )
-        outer_radius = int(round(radius * 1.8))
-        outer_kernel = 2 * outer_radius + 1
-        outer = cv2.boxFilter(
-            roi, -1, (outer_kernel, outer_kernel),
-            normalize=True, borderType=cv2.BORDER_REPLICATE,
-        )
-        inner_area = float(kernel * kernel)
-        outer_area = float(outer_kernel * outer_kernel)
-        ring = (outer * outer_area - inner * inner_area) / max(outer_area - inner_area, 1.0)
-        score = ring - inner
-        margin = radius + 2
-        score[:margin, :] = -1e9
-        score[-margin:, :] = -1e9
-        score[:, :margin] = -1e9
-        score[:, -margin:] = -1e9
-        score[inner > 60] = -1e9
-        row, col = np.unravel_index(int(np.argmax(score)), score.shape)
-        value = float(score[row, col])
-        if best is None or value > best[0]:
-            best = (value, x0 + int(col), y0 + int(row), radius, float(inner[row, col]))
-    if best is None or best[0] < 46 or best[4] > 55:
-        return None
-    _score, cx, cy, radius, _inner = best
-    return _refine_iron_center(gray, cx, cy, radius, _score)
-
-
-def _refine_iron_center(gray, cx, cy, radius, score):
-    """Geser pusat dari bibir terang ke tengah rongga gelap."""
-    height, width = gray.shape
-    reach = int(round(radius * 2.2))
-    pad = reach + 2
-    padded = cv2.copyMakeBorder(
-        gray, pad, pad, pad, pad, borderType=cv2.BORDER_REPLICATE,
-    )
-    cxp = float(cx) + pad
-    cyp = float(cy) + pad
-    y0 = int(round(cyp)) - reach
-    x0 = int(round(cxp)) - reach
-    roi = padded[y0:y0 + 2 * reach + 1, x0:x0 + 2 * reach + 1]
-    yy, xx = np.ogrid[0:roi.shape[0], 0:roi.shape[1]]
-    disk = (xx - (cxp - x0)) ** 2 + (yy - (cyp - y0)) ** 2 <= (radius * 2.0) ** 2
-    selected = disk & (roi < 48)
-    if int(selected.sum()) < 20:
-        return float(cx), float(cy), float(radius), score
-    rows, cols = np.where(selected)
-    center_x = float(cols.mean() + x0 - pad)
-    center_y = float(rows.mean() + y0 - pad)
-    if not (0 <= center_x < width and 0 <= center_y < height):
-        return float(cx), float(cy), float(radius), score
-    if np.hypot(center_x - cx, center_y - cy) > radius * 1.6:
-        return float(cx), float(cy), float(radius), score
-    spread = float(np.sqrt(
-        ((cols - cols.mean()) ** 2 + (rows - rows.mean()) ** 2).mean()
-    ))
-    drawn = float(np.clip(max(radius, spread * 1.35), 8.0, 48.0))
-    return center_x, center_y, drawn, score
-
-
 class SidePinholeTracker(PinholeTracker):
-    """Pelacak samping. Pusatnya lubang bulat besi yang gelap, bukan tepi terang."""
+    """Pelacak samping: template matching + ECC, pusatnya oval kalibrasi."""
 
     MAX_JUMP = 42.0
 
     def __init__(self, reference_frame):
         super().__init__(reference_frame)
         self.last_center = None
-        self.iron_offset = None
-
-    def prepare_reference(self, shape, p):
-        previous = self.cache_key
-        super().prepare_reference(shape, p)
-        if self.cache_key == previous:
-            return
-        reference = self.reference
-        height, width = shape
-        if reference.shape[:2] != (height, width):
-            reference = cv2.resize(reference, (width, height))
-        # Lubang bulat diukur pada gambar asli. Mask HSV kalibrasi
-        # menggelapkan besi dan menggeser pusatnya ke tepi terang.
-        raw_gray = reference if reference.ndim == 2 else cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
-        self.iron_offset = self._iron_offset(raw_gray)
-
-    def _iron_offset(self, gray):
-        if self.ellipse is None or self.search is None:
-            return None
-        x0, y0, x1, y1 = self.search
-        found = _round_iron_hole(gray, (x0 - 36, y0 - 36, x1 + 36, y1 + 36))
-        if found is None:
-            return None
-        hx, hy, radius, score = found
-        ecx, ecy = self.ellipse[0]
-        if np.hypot(hx - ecx, hy - ecy) > 110:
-            return None
-        if score < 46:
-            return None
-        return float(hx - ecx), float(hy - ecy), float(radius)
-
-    def _snap_round_iron(self, gray, result):
-        if self.iron_offset is None:
-            return result, None
-        dx, dy, ref_radius = self.iron_offset
-        ecx, ecy = result["center"]
-        expected_x = float(ecx) + dx
-        expected_y = float(ecy) + dy
-        pad = 72
-        found = _round_iron_hole(
-            gray,
-            (expected_x - pad, expected_y - pad, expected_x + pad, expected_y + pad),
-        )
-        if found is None:
-            return None, "Lubang bulat besi tidak terlihat."
-        hx, hy, radius, score = found
-        if np.hypot(hx - expected_x, hy - expected_y) > 34 or score < 40:
-            return None, "Lubang bulat besi tidak terlihat."
-        radius = float(np.clip(radius, ref_radius * 0.65, ref_radius * 1.45))
-        diameter = radius * 2.0
-        snapped = dict(result)
-        snapped["center"] = (float(hx), float(hy))
-        snapped["ellipse"] = ((float(hx), float(hy)), (diameter, diameter), 0.0)
-        return snapped, "Lubang bulat"
 
     def detect(self, gray, p, frame=None):
         result, note = super().detect(gray, p, frame)
         if result is None:
             self.last_center = None
             return result, note
-        source = gray
-        if frame is not None:
-            source = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        result, iron_note = self._snap_round_iron(source, result)
-        if result is None:
-            self.last_center = None
-            return None, iron_note
-        if iron_note:
-            note = iron_note
 
         cx, cy = result["center"]
         if self.last_center is not None:
