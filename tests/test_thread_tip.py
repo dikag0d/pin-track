@@ -143,6 +143,17 @@ class ThreadTipTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_parameters(p)
 
+    def test_tip_is_the_left_end_of_the_white_mask(self):
+        frame = make_thread_frame()
+        result, mask = BrownThreadTipTracker().detect(frame, self.params)
+        self.assertIsNotNone(result)
+        tip_x, tip_y = result["tip"]
+        y = int(round(tip_y))
+        band = mask[max(0, y - 4):y + 5]
+        xs = np.where(band > 0)[1]
+        self.assertGreater(len(xs), 0)
+        self.assertLess(abs(tip_x - int(xs.min())), 2.0)
+
     def test_tip_is_free_end_not_image_border(self):
         frame = make_thread_frame()
         result, mask = BrownThreadTipTracker().detect(frame, self.params)
@@ -272,6 +283,21 @@ class ThreadTipTest(unittest.TestCase):
     def test_launch_template_is_the_side_train_video(self):
         self.assertEqual(SIDE_SAMPLE.name, "side_train.mp4")
         self.assertTrue(SIDE_SAMPLE.is_file())
+
+    def test_side_follows_a_dim_tip_cut_off_the_white_mask(self):
+        """Ujung S-nya di bawah ambang mask putih, tetapi masih cokelat."""
+        frame = make_side_train_frame(tip_x=180)
+        frame[425:427, 150:180] = hsv_bgr(14, 10, 100)
+        tracker = BrownThreadTipTracker()
+        params = defaults_for("side")
+        result = None
+        for _ in range(3):
+            result, _mask = tracker.detect(frame, params)
+        self.assertIsNotNone(result)
+        tip_x, tip_y = result["tip"]
+        self.assertLess(tip_x, 165)
+        self.assertGreater(tip_x, 140)
+        self.assertAlmostEqual(tip_y, 426, delta=4)
 
     def test_side_follows_the_faint_brown_tip_not_the_bright_edge(self):
         frame = make_side_train_frame(tip_x=140)

@@ -165,6 +165,47 @@ class BrownThreadTipTracker:
         thickness[-2] = thick[-2]
         return x0, smooth, thickness, thick
 
+    def _left_white_on_row(self, binary, tip_x, tip_y, row_radius=4, join_gap=6):
+        """Piksel putih paling kiri yang tersambung ke ujung, pada baris yang sama.
+
+        None bila mask tidak lebih kiri dari ujung sekarang, atau pecahan itu
+        ada di baris lain (tepi logam di bawah benang).
+        """
+        if binary is None or binary.size == 0:
+            return None
+        height, width = binary.shape
+        y_mid = int(round(float(tip_y)))
+        y0 = max(0, y_mid - row_radius)
+        y1 = min(height, y_mid + row_radius + 1)
+        band = binary[y0:y1] > 0
+        if band.size == 0 or not band.any():
+            return None
+        columns = np.flatnonzero(band.any(axis=0))
+        if len(columns) == 0:
+            return None
+        anchor = int(np.clip(round(float(tip_x)), 0, width - 1))
+        nearest = int(columns[np.argmin(np.abs(columns.astype(np.int32) - anchor))])
+        if abs(nearest - anchor) > join_gap + 4:
+            return None
+        present = np.zeros(width, np.uint8)
+        present[columns] = 1
+        left = nearest
+        gap = 0
+        for x in range(nearest, -1, -1):
+            if present[x]:
+                left = x
+                gap = 0
+            else:
+                gap += 1
+                if gap > join_gap:
+                    break
+        if left >= float(tip_x) - 0.5:
+            return None
+        rows = np.flatnonzero(band[:, left])
+        if len(rows) == 0:
+            return None
+        return float(left), float(np.median(rows) + y0)
+
     def _measure_tip(self, opened, component, p):
         min_length = 12 if int(p.get("thread_cover_gap", 0)) > 0 else MIN_PROFILE_LENGTH
         profile = self._column_profile(
@@ -224,6 +265,14 @@ class BrownThreadTipTracker:
         else:
             tip_y = near - SHAFT_OFFSET * slope
         tip_x = float(x0) + tip_index
+        tip_y = float(tip_y)
+        # Rasio tebal menaruh ujung di badan, bukan di piksel putih paling kiri.
+        # Geser ke ujung kiri mask yang tersambung pada baris yang sama.
+        snapped = self._left_white_on_row(
+            cv2.bitwise_and(opened, component), tip_x, tip_y,
+        )
+        if snapped is not None:
+            tip_x, tip_y = snapped
 
         height, width = opened.shape
         if not (
@@ -401,7 +450,9 @@ class BrownThreadTipTracker:
             brown_h = (hue >= h0) & (hue <= h1)
         else:
             brown_h = (hue >= h0) | (hue <= h1)
-        faint_s = max(12, int(round(float(p["th_smin"]) * 0.30)))
+        # S minimum mask memotong ujung yang pudar. 8 masih menolak logam abu-abu
+        # (S sekitar 5) tetapi menangkap ujung cokelat yang tidak masuk mask putih.
+        faint_s = max(8, int(round(float(p["th_smin"]) * 0.20)))
         brown = (
             brown_h
             & (sat >= faint_s)
@@ -460,6 +511,14 @@ class BrownThreadTipTracker:
                 tip_y = float(previous[1])
             else:
                 continue
+            # Mask putih yang memanjang lebih ke kiri daripada punggung saturasi
+            # adalah ujung yang terpotong ambang S. Ikuti piksel putih itu.
+            white_left = self._left_white_on_row(
+                _hsv_range(hsv, p), float(tip_x), tip_y,
+            )
+            if white_left is not None:
+                tip_x = int(round(white_left[0]))
+                tip_y = float(white_left[1])
             med_g = float(np.median(gray[ys, xs]))
             med_v = float(np.median(val[ys, xs]))
             # Tepi logam lebih putih. Alur yang terlalu gelap juga bukan benang.

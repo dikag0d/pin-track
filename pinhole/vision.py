@@ -1,7 +1,9 @@
 """Pemrosesan citra dan pelacak oval.
 
-Algoritme TOP (PinholeTracker.detect) tidak diubah dari sumber asli:
-template matching multi-skala + ECC affine pada koordinat 640 x 480.
+Algoritme TOP dan SIDE: template matching multi-skala + ECC affine
+pada koordinat 640 x 480. Kecocokan ditolak bila pola di dalam oval
+lubang tidak sama dengan kalibrasi — jarum yang jauh atau belum
+terpasang tidak lagi dilaporkan sebagai lubang.
 """
 
 from __future__ import annotations
@@ -10,6 +12,12 @@ import json
 
 import cv2
 import numpy as np
+
+# Pola di dalam oval harus mirip kalibrasi. Ambang ini menolak tepi logam
+# yang skor templatenya masih tinggi padahal jarum belum terpasang atau
+# sudah jauh. side_train yang lubangnya ada tetap di atas 0.90.
+HOLE_NCC_MIN = 0.85
+HOLE_STD_RATIO_MIN = 0.50
 
 
 def prepare_image(frame, p):
@@ -171,6 +179,60 @@ class PinholeTracker:
 
         self.cache_key = key
 
+    def _hole_mask(self, shape):
+        """Mask oval pada koordinat template yang sudah diskalakan."""
+        height, width = shape
+        mask = np.zeros((height, width), np.uint8)
+        if self.ellipse is None or self.box is None:
+            return mask
+        (cx, cy), (axis_a, axis_b), angle = self.ellipse
+        _tx, _ty, tw, th = self.box
+        if tw < 1 or th < 1:
+            return mask
+        sx = width / float(tw)
+        sy = height / float(th)
+        center = (float((cx - _tx) * sx), float((cy - _ty) * sy))
+        axes = (
+            float(max(axis_a * abs(sx), 1.0)),
+            float(max(axis_b * abs(sy), 1.0)),
+        )
+        if not (
+            np.isfinite(center).all()
+            and np.isfinite(axes).all()
+            and -width <= center[0] <= 2 * width
+            and -height <= center[1] <= 2 * height
+        ):
+            return mask
+        cv2.ellipse(mask, (center, axes, float(angle)), 255, -1)
+        return mask
+
+    def _hole_present(self, template, patch):
+        """True bila isi oval kandidat masih pola lubang yang dikalibrasi."""
+        if patch.shape != template.shape:
+            return False
+        mask = self._hole_mask(template.shape)
+        selected = mask > 0
+        if int(selected.sum()) < 20:
+            return True
+        sample_t = template[selected].astype(np.float64)
+        sample_p = patch[selected].astype(np.float64)
+        template_std = float(sample_t.std())
+        patch_std = float(sample_p.std())
+        mean_gap = abs(float(sample_p.mean()) - float(sample_t.mean()))
+        if template_std < 1.5:
+            # Lubang kalibrasi hampir rata (gelap). Isi yang jauh lebih terang
+            # atau lebih gelap berarti jarum tidak ada.
+            return mean_gap <= 18.0
+        if patch_std < HOLE_STD_RATIO_MIN * template_std:
+            return False
+        sample_t -= sample_t.mean()
+        sample_p -= sample_p.mean()
+        denom = float(np.linalg.norm(sample_t) * np.linalg.norm(sample_p))
+        if denom < 1e-6:
+            return False
+        agreement = float((sample_t * sample_p).sum() / denom)
+        return agreement >= HOLE_NCC_MIN
+
     def detect(self, gray, p):
         self.prepare_reference(gray.shape, p)
 
@@ -208,6 +270,9 @@ class PinholeTracker:
 
         if patch.std() < 1.0:
             return None, "Patch kandidat terlalu seragam."
+
+        if not self._hole_present(template, patch):
+            return None, "Lubang tidak cocok. Jarum belum terpasang atau terlalu jauh."
 
         warp = np.eye(2, 3, dtype=np.float32)
         ecc_score = None
