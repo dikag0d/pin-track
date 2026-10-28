@@ -17,6 +17,7 @@ import numpy as np
 from pinhole.capture import CaptureWorker
 from pinhole.params import (
     SIDE_PX_PER_MM_Z,
+    SIDE_SAMPLE,
     TOP_PX_PER_MM_X,
     TOP_PX_PER_MM_Y,
     defaults_for,
@@ -37,6 +38,21 @@ def copper_bgr():
     pixel = np.uint8([[[10, 200, 170]]])
     bgr = cv2.cvtColor(pixel, cv2.COLOR_HSV2BGR)[0, 0]
     return tuple(int(v) for v in bgr)
+
+
+def hsv_bgr(hue, saturation, value):
+    pixel = np.uint8([[[hue, saturation, value]]])
+    bgr = cv2.cvtColor(pixel, cv2.COLOR_HSV2BGR)[0, 0]
+    return tuple(int(v) for v in bgr)
+
+
+def make_side_train_frame(tip_x=140):
+    """Badan jenuh, ujung cokelat tipis, plus tepi logam terang yang bukan benang."""
+    image = np.full((480, 640, 3), 168, np.uint8)
+    image[456:462, 80:639] = hsv_bgr(18, 70, 185)
+    image[425:427, tip_x:340] = hsv_bgr(14, 18, 102)
+    image[423:429, 340:639] = hsv_bgr(12, 90, 110)
+    return image
 
 
 def make_thread_frame(
@@ -231,7 +247,10 @@ class ThreadTipTest(unittest.TestCase):
         frame[449:451, 180:300] = color
         frame[449:451, 340:639] = color
         side = defaults_for("side")
-        result, mask = BrownThreadTipTracker().detect(frame, side)
+        tracker = BrownThreadTipTracker()
+        result, mask = None, None
+        for _ in range(3):
+            result, mask = tracker.detect(frame, side)
         self.assertIsNotNone(result)
         tip_x, tip_y = result["tip"]
         self.assertGreater(tip_x, 170)
@@ -249,6 +268,129 @@ class ThreadTipTest(unittest.TestCase):
         missed, blue_mask = BrownThreadTipTracker().detect(frame, side)
         self.assertIsNone(missed)
         self.assertEqual(int(blue_mask.sum()), 0)
+
+    def test_launch_template_is_the_side_train_video(self):
+        self.assertEqual(SIDE_SAMPLE.name, "side_train.mp4")
+        self.assertTrue(SIDE_SAMPLE.is_file())
+
+    def test_side_follows_the_faint_brown_tip_not_the_bright_edge(self):
+        frame = make_side_train_frame(tip_x=140)
+        tracker = BrownThreadTipTracker()
+        params = defaults_for("side")
+        result = None
+        for _ in range(3):
+            result, _mask = tracker.detect(frame, params)
+        self.assertIsNotNone(result)
+        tip_x, tip_y = result["tip"]
+        self.assertLess(tip_x, 170)
+        self.assertGreater(tip_x, 120)
+        self.assertAlmostEqual(tip_y, 426, delta=4)
+
+    def test_side_faint_tip_advances_smoothly(self):
+        tracker = BrownThreadTipTracker()
+        params = defaults_for("side")
+        for _ in range(2):
+            tracker.detect(make_side_train_frame(220), params)
+        tips = []
+        for step in range(12):
+            frame = make_side_train_frame(tip_x=220 - step * 2)
+            result, _mask = tracker.detect(frame, params)
+            self.assertIsNotNone(result)
+            tips.append(result["tip"][0])
+        deltas = np.diff(tips)
+        self.assertTrue(np.all(deltas <= 1.0), msg=str(tips))
+        self.assertLess(tips[-1], tips[0] - 8)
+        self.assertGreater(tips[-1], 220 - 22 - 8)
+
+    def test_gate_holds_flicker_until_the_same_tip_repeats(self):
+        tracker = BrownThreadTipTracker()
+        tracker.locked_gray = 95.0
+        previous = (200.0, 426.0)
+
+        def chosen(x, y=426.0, gray=95.0):
+            return {
+                "tip": (float(x), float(y)),
+                "tip_ellipse": ((float(x), float(y)), (8.0, 8.0), 0.0),
+                "median_gray": gray,
+            }
+
+        extended = tracker._gate_tip(chosen(150), previous)
+        self.assertAlmostEqual(extended["tip"][0], 196.0)
+        held_right = tracker._gate_tip(chosen(240), previous)
+        self.assertAlmostEqual(held_right["tip"][0], 200.0)
+        crawled = tracker._gate_tip(chosen(240), previous)
+        self.assertAlmostEqual(crawled["tip"][0], 216.0)
+
+    def test_gate_keeps_a_dark_thread_when_a_brighter_row_appears(self):
+        tracker = BrownThreadTipTracker()
+        tracker.locked_gray = 95.0
+        previous = (200.0, 426.0)
+        edge = {
+            "tip": (80.0, 458.0),
+            "tip_ellipse": ((80.0, 458.0), (8.0, 8.0), 0.0),
+            "median_gray": 150.0,
+        }
+        for _ in range(3):
+            held = tracker._gate_tip(edge, previous)
+            self.assertAlmostEqual(held["tip"][1], 426.0)
+            self.assertAlmostEqual(held["tip"][0], 200.0)
+
+    def test_gate_stays_on_the_locked_row(self):
+        tracker = BrownThreadTipTracker()
+        tracker.locked_gray = 140.0
+        previous = (200.0, 426.0)
+        other = {
+            "tip": (140.0, 458.0),
+            "tip_ellipse": ((140.0, 458.0), (8.0, 8.0), 0.0),
+            "median_gray": 90.0,
+        }
+        for _ in range(3):
+            held = tracker._gate_tip(other, previous)
+            self.assertAlmostEqual(held["tip"][0], 200.0)
+            self.assertAlmostEqual(held["tip"][1], 426.0)
+
+    def test_side_stays_on_the_thread_when_only_the_bright_edge_remains(self):
+        tracker = BrownThreadTipTracker()
+        params = defaults_for("side")
+        locked = None
+        for _ in range(4):
+            locked, _mask = tracker.detect(make_side_train_frame(200), params)
+        self.assertIsNotNone(locked)
+        edge = np.full((480, 640, 3), 168, np.uint8)
+        edge[456:462, 80:639] = hsv_bgr(18, 70, 185)
+        result, _mask = tracker.detect(edge, params)
+        self.assertIsNotNone(result)
+        self.assertAlmostEqual(result["tip"][1], locked["tip"][1], delta=6)
+        self.assertLess(abs(result["tip"][0] - locked["tip"][0]), 12)
+
+    def test_long_runs_bridge_one_cover_gap_and_specks_do_not(self):
+        tracker = BrownThreadTipTracker()
+        bridged = np.zeros(640, np.uint8)
+        bridged[180:300] = 1
+        bridged[340:640] = 1
+        self.assertLess(tracker._left_visible_tip(bridged, 48, 8), 190)
+
+        specks = np.zeros(640, np.uint8)
+        specks[400:640] = 1
+        specks[370:372] = 1
+        specks[330:332] = 1
+        specks[290:292] = 1
+        self.assertGreater(tracker._left_visible_tip(specks, 48, 8), 390)
+
+    def test_side_ignores_a_one_frame_fragment_past_the_tip(self):
+        tracker = BrownThreadTipTracker()
+        params = defaults_for("side")
+        for _ in range(2):
+            tracker.detect(make_side_train_frame(200), params)
+        tips = []
+        for step in range(8):
+            frame = make_side_train_frame(tip_x=200)
+            if step == 4:
+                frame[425:427, 150:168] = hsv_bgr(14, 40, 110)
+            result, _mask = tracker.detect(frame, params)
+            self.assertIsNotNone(result)
+            tips.append(result["tip"][0])
+        self.assertLess(max(tips) - min(tips), 18, msg=str(tips))
 
     def test_blue_thread_is_ignored(self):
         frame = make_thread_frame()
@@ -399,7 +541,10 @@ class InsertionPathTest(unittest.TestCase):
 
     def test_locked_default_oval_stands_vertical(self):
         p = defaults_for("side")
-        result, _mask = BrownThreadTipTracker().detect(make_thread_frame(), p)
+        tracker = BrownThreadTipTracker()
+        result = None
+        for _ in range(3):
+            result, _mask = tracker.detect(make_thread_frame(), p)
         (_cx, _cy), axes, angle = result["tip_ellipse"]
         self.assertTrue(result["oval_locked"])
         self.assertAlmostEqual(angle, 90.0)

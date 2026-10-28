@@ -3,7 +3,7 @@
 Membutuhkan numpy, opencv-python, ffmpeg/ffprobe.
 
 Jalankan:
-    python pinhole_presisi.py samples/side.webm hasil.mp4
+    python pinhole_presisi.py samples/side_train.mp4 hasil.mp4
 
 Oval lubang mengikuti template matching multi-skala + ECC di kotak pencarian
 SIDE. Bukan ukuran metrologi. Kalibrasi ulang di GUI jika kamera berubah.
@@ -20,11 +20,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from pinhole.params import defaults_for
+from pinhole.params import SIDE_SAMPLE, defaults_for
 from pinhole.vision import SidePinholeTracker
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_INPUT = SCRIPT_DIR / "samples" / "side.webm"
+DEFAULT_INPUT = SIDE_SAMPLE
 
 
 def _gray(frame):
@@ -158,7 +158,7 @@ def write_concat_video(folder: Path, records, timestamps, info, input_video, out
     )
 
 
-def main(input_video="samples/side.webm", output_video="hasil.mp4"):
+def main(input_video="samples/side_train.mp4", output_video="hasil.mp4"):
     input_video = str(input_video)
     output_video = str(output_video)
     if Path(input_video).resolve() == Path(output_video).resolve():
@@ -202,7 +202,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "input",
         nargs="?",
-        default=str(DEFAULT_INPUT if DEFAULT_INPUT.is_file() else "samples/side.webm"),
+        default=str(DEFAULT_INPUT if DEFAULT_INPUT.is_file() else "samples/side_train.mp4"),
     )
     parser.add_argument("output", nargs="?", default="hasil.mp4")
     args = parser.parse_args()

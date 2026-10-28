@@ -324,7 +324,7 @@ class CameraPane(QGroupBox):
 
         placeholder = (
             "Path video, misalnya top.webm"
-            if self.top else "Path video, misalnya samples/side.webm"
+            if self.top else "Path video, misalnya samples/side_train.mp4"
         )
         self.file_path = QLineEdit(initial_file)
         self.file_path.setPlaceholderText(placeholder)
@@ -415,7 +415,7 @@ class CameraPane(QGroupBox):
         self.message = QLabel(
             "Preset awal untuk top.webm. Kalibrasi ulang untuk kamera/video lain."
             if self.top else
-            "Preset SIDE untuk samples/side.webm. Kalibrasi ulang jika kamera berubah."
+            "Preset SIDE untuk samples/side_train.mp4. Kalibrasi ulang jika kamera berubah."
         )
         self.message.setObjectName("statusMessage")
         self.message.setWordWrap(True)
