@@ -256,7 +256,7 @@ class CaptureWorker(threading.Thread):
                 try:
                     validate_parameters(p, top=(self.role == "top"))
                     adjusted, mask, gray = prepare_image(raw, p)
-                    result, note = tracker.detect(gray, p)
+                    result, note = tracker.detect(gray, p, raw)
                 except (ValueError, cv2.error, np.linalg.LinAlgError) as exc:
                     note = str(exc)
 
