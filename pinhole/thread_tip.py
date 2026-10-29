@@ -486,7 +486,7 @@ def insertion_paths(pinhole, thread, from_right=True):
     Jalur benang selaras bila seluruh tebalnya berada di dalam bukaan
     jarum. Di luar itu ujung akan menabrak dinding lubang.
     """
-    paths = {"needle": None, "thread": None, "aligned": None}
+    paths = {"needle": None, "thread": None, "aligned": None, "entered": None}
     if pinhole is not None and pinhole.get("ellipse") is not None:
         x_min, y_min, x_max, y_max = _span(ellipse_points(pinhole["ellipse"]))
         paths["needle"] = {
@@ -512,6 +512,12 @@ def insertion_paths(pinhole, thread, from_right=True):
             band["y0"] >= needle["y0"] - tol
             and band["y1"] <= needle["y1"] + tol
         )
+        tip_x = band["tip"][0]
+        if from_right:
+            reached = tip_x <= needle["gate_x"] + tol
+        else:
+            reached = tip_x >= needle["gate_x"] - tol
+        paths["entered"] = bool(paths["aligned"] and reached)
     return paths
 
 
@@ -595,6 +601,17 @@ def draw_insertion_overlay(frame, pinhole, thread, from_right=True):
         cv2.putText(
             out, label, (16, 76), cv2.FONT_HERSHEY_SIMPLEX,
             0.6, color, 1, cv2.LINE_AA,
+        )
+    if paths["entered"] is True:
+        decision, decision_color = "BENANG MASUK", NEEDLE_COLOR
+    elif paths["entered"] is False:
+        decision, decision_color = "TIDAK MASUK", (0, 80, 255)
+    else:
+        decision = None
+    if decision is not None:
+        cv2.putText(
+            out, decision, (16, 100), cv2.FONT_HERSHEY_SIMPLEX,
+            0.7, decision_color, 2, cv2.LINE_AA,
         )
     return out
 

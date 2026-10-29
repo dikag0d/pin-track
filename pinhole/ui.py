@@ -917,13 +917,16 @@ class CameraPane(QGroupBox):
                     from_right=bool(params.get("thread_from_right", True)),
                 )
         aligned = None
+        entered = None
         if enabled and params.get("path_overlay", True):
-            aligned = insertion_paths(
+            paths = insertion_paths(
                 packet["result"],
                 thread,
                 from_right=bool(params.get("thread_from_right", True)),
-            )["aligned"]
-        self._show_thread_readout(thread, enabled, aligned)
+            )
+            aligned = paths["aligned"]
+            entered = paths["entered"]
+        self._show_thread_readout(thread, enabled, aligned, entered)
 
         out = self._with_ruler(out)
         self.shown = out
@@ -969,7 +972,7 @@ class CameraPane(QGroupBox):
     def _set_thread_readout(self, body):
         self.thread_readout.setText(f'<span style="color:#50d0cb; font-weight:600;">{body}</span>')
 
-    def _show_thread_readout(self, thread, enabled, aligned=None):
+    def _show_thread_readout(self, thread, enabled, aligned=None, entered=None):
         if not enabled:
             self._set_thread_readout("Ujung benang: deteksi mati")
             return
@@ -1007,10 +1010,12 @@ class CameraPane(QGroupBox):
                 oval_txt = f" | tebal {thick_mm:.2f} mm"
             else:
                 oval_txt = f" | tebal {thick:.1f} px"
-        if aligned is True:
-            align_txt = " | jalur selaras"
+        if entered is True:
+            align_txt = " | benang masuk"
         elif aligned is False:
-            align_txt = " | benang melewati jarum"
+            align_txt = " | tidak masuk, benang melewati jarum"
+        elif aligned is True:
+            align_txt = " | tidak masuk, belum sampai lubang"
         else:
             align_txt = ""
         self._set_thread_readout(

@@ -290,6 +290,19 @@ class InsertionPathTest(unittest.TestCase):
         self.assertAlmostEqual(paths["thread"]["y0"], 210.0)
         self.assertAlmostEqual(paths["thread"]["y1"], 230.0)
         self.assertTrue(paths["aligned"])
+        self.assertFalse(paths["entered"])
+
+    def test_thread_that_reaches_the_gate_has_entered(self):
+        inside = insertion_paths(
+            _pinhole(), _thread(tip=(200.0, 220.0), across=20.0), from_right=True
+        )
+        self.assertTrue(inside["aligned"])
+        self.assertTrue(inside["entered"])
+        outside = insertion_paths(
+            _pinhole(), _thread(tip=(200.0, 150.0), across=20.0), from_right=True
+        )
+        self.assertFalse(outside["aligned"])
+        self.assertFalse(outside["entered"])
 
     def test_thread_outside_needle_crosses_the_opening(self):
         paths = insertion_paths(
