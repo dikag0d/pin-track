@@ -171,10 +171,17 @@ class PinholeTracker:
 
         self.cache_key = key
 
-    def detect(self, gray, p):
+    def detect(self, gray, p, search=None):
         self.prepare_reference(gray.shape, p)
 
-        x0, y0, x1, y1 = self.search
+        if search is None:
+            x0, y0, x1, y1 = self.search
+        else:
+            height, width = gray.shape[:2]
+            x0 = max(0, min(width - 1, int(search[0])))
+            y0 = max(0, min(height - 1, int(search[1])))
+            x1 = max(0, min(width, int(search[2])))
+            y1 = max(0, min(height, int(search[3])))
         roi = gray[y0:y1, x0:x1]
         if roi.size == 0 or roi.std() < 1.0:
             return None, "Area pencarian kosong atau terlalu seragam."
@@ -395,34 +402,337 @@ def detect_dark_oval(gray, p, previous=None):
 
 
 class SidePinholeTracker(PinholeTracker):
-    """Pelacak samping: template matching multi-skala + ECC affine (sama seperti TOP).
+    """Lubang samping: oval gelap digabung dengan template matching + ECC.
 
-    Algoritme identik dengan PinholeTracker.detect; hanya menambahkan
-    pengecekan loncatan pusat antar-frame untuk menolak deteksi yang melompat
-    terlalu jauh ketika skor rendah.
+    Template kalibrasi dipakai bila pusatnya memang gelap. Kalau template
+    mengunci logam terang, oval gelap yang menang, lalu dicocokkan lagi
+    secara lokal. Bila oval kalibrasi tidak muat, bukaan gelap dilacak
+    dengan template yang dipelajari dari frame itu sendiri.
     """
 
     MAX_JUMP = 42.0
+    DARK_MEAN = 80.0
 
     def __init__(self, reference_frame):
         super().__init__(reference_frame)
         self.last_center = None
         self.misses = 0
+        self.opening_template = None
+        self.opening_center = None
+        self.opening_ellipse = None
+
+    def _ellipse_is_dark(self, gray, result):
+        if result is None:
+            return False
+        mask = np.zeros(gray.shape[:2], np.uint8)
+        try:
+            cv2.ellipse(mask, result["ellipse"], 255, -1)
+        except cv2.error:
+            return False
+        inside = gray[mask > 0]
+        if inside.size < 8:
+            return False
+        return float(inside.mean()) < self.DARK_MEAN
+
+    def _near(self, a, b, limit):
+        dx = float(a[0]) - float(b[0])
+        dy = float(a[1]) - float(b[1])
+        return (dx * dx + dy * dy) ** 0.5 <= limit
+
+    def _window(self, center):
+        cx, cy = center
+        _tx, _ty, tw, th = self.box
+        return (cx - tw, cy - th, cx + tw, cy + th)
+
+    def _prefer_dark(self, gray, p, tm, tm_note, dark):
+        if self._ellipse_is_dark(gray, tm) and self._near(
+            tm["center"], dark["center"], 24
+        ):
+            return tm, tm_note
+        refined, _note = super().detect(
+            gray, p, search=self._window(dark["center"])
+        )
+        if (
+            self._ellipse_is_dark(gray, refined)
+            and self._near(refined["center"], dark["center"], 18)
+        ):
+            return refined, "Oval gelap + TM"
+        return dark, "Oval gelap"
+
+    def _opening_seed(self, gray):
+        """Bukaan kecil: inti gelap, lingkaran lebih terang, bukan bayangan besar."""
+        blurred_core = cv2.GaussianBlur(gray.astype(np.float32), (0, 0), 1.6)
+        blurred_ring = cv2.GaussianBlur(gray.astype(np.float32), (0, 0), 5.0)
+        score = blurred_ring - blurred_core
+        score[blurred_core > 115] = 0
+        height, width = gray.shape[:2]
+        score[:12, :] = 0
+        score[-12:, :] = 0
+        score[:, :12] = 0
+        score[:, -12:] = 0
+        dark = (gray < 100).astype(np.uint8)
+        count, labels, stats, _centroids = cv2.connectedComponentsWithStats(dark)
+        for index in range(1, count):
+            x, y, comp_w, comp_h, area = (int(v) for v in stats[index])
+            touches = (
+                x <= 1 or y <= 1
+                or x + comp_w >= width - 1
+                or y + comp_h >= height - 1
+            )
+            if (
+                touches
+                or area > 500
+                or area < 8
+                or max(comp_w, comp_h) > 36
+                or min(comp_w, comp_h) < 4
+            ):
+                score[labels == index] = 0
+        if float(score.max()) < 42:
+            return None
+        y, x = np.unravel_index(int(np.argmax(score)), score.shape)
+        if int(gray[y, x]) >= 98:
+            return None
+        return float(x), float(y), float(score[y, x])
+
+    def _crop_opening(self, gray, center):
+        cx, cy = int(round(center[0])), int(round(center[1]))
+        half_w, half_h = 16, 14
+        x0, y0 = cx - half_w, cy - half_h
+        x1, y1 = cx + half_w, cy + half_h
+        height, width = gray.shape[:2]
+        if x0 < 0 or y0 < 0 or x1 > width or y1 > height:
+            return None
+        patch = gray[y0:y1, x0:x1]
+        if patch.size == 0 or float(patch.std()) < 1.0:
+            return None
+        return patch.copy()
+
+    def _result_at(self, center, p, score, axes):
+        axis_u, axis_v = axes
+        return {
+            "ellipse": (
+                (float(center[0]), float(center[1])),
+                (float(axis_u), float(axis_v)),
+                float(p["angle"]),
+            ),
+            "center": (float(center[0]), float(center[1])),
+            "score": float(score),
+            "ecc": None,
+            "refined": False,
+        }
+
+    def _match_opening(self, gray, p):
+        template = self.opening_template
+        if template is None or self.opening_center is None:
+            return None
+        th, tw = template.shape
+        cx, cy = self.opening_center
+        x0 = int(round(cx)) - tw
+        y0 = int(round(cy)) - th
+        x1 = int(round(cx)) + tw * 2
+        y1 = int(round(cy)) + th * 2
+        height, width = gray.shape[:2]
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(width, x1), min(height, y1)
+        roi = gray[y0:y1, x0:x1]
+        if roi.shape[0] < th or roi.shape[1] < tw or float(roi.std()) < 1.0:
+            return None
+        scores = cv2.matchTemplate(roi, template, cv2.TM_CCOEFF_NORMED)
+        scores = np.nan_to_num(scores, nan=-1.0, posinf=-1.0, neginf=-1.0)
+        _min_score, score, _min_loc, location = cv2.minMaxLoc(scores)
+        if score < 0.45:
+            return None
+        px, py = x0 + location[0], y0 + location[1]
+        center = (px + tw / 2.0, py + th / 2.0)
+        core = gray[
+            int(center[1]) - 3:int(center[1]) + 4,
+            int(center[0]) - 3:int(center[0]) + 4,
+        ]
+        if core.size == 0 or float(core.mean()) >= 100:
+            return None
+        warp = np.eye(2, 3, dtype=np.float32)
+        patch = gray[py:py + th, px:px + tw]
+        if p.get("ecc_on", True) and patch.shape == template.shape:
+            try:
+                cc, candidate = cv2.findTransformECC(
+                    template,
+                    patch,
+                    warp.copy(),
+                    cv2.MOTION_AFFINE,
+                    (
+                        cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
+                        int(p["ecc_iterations"]),
+                        1e-4,
+                    ),
+                    None,
+                    3,
+                )
+                if np.isfinite(cc) and np.isfinite(candidate).all():
+                    singular = np.linalg.svd(candidate[:, :2], compute_uv=False)
+                    valid = (
+                        cc >= p["min_ecc"]
+                        and np.all((singular > 0.85) & (singular < 1.18))
+                        and np.linalg.det(candidate[:, :2]) > 0
+                        and np.linalg.norm(candidate[:, 2]) < p["ecc_shift"]
+                    )
+                    if valid:
+                        center = (
+                            px + tw / 2.0 + float(candidate[0, 2]),
+                            py + th / 2.0 + float(candidate[1, 2]),
+                        )
+            except cv2.error:
+                pass
+        return self._result_at(center, p, score, self._opening_axes(p))
+
+    def _adopt_opening(self, gray, p, center, score):
+        template = self._crop_opening(gray, center)
+        if template is None:
+            return None, ""
+        self.opening_template = template
+        self.opening_center = center
+        return self._result_at(
+            center, p, score, self._opening_axes(p)
+        ), "TM bukaan"
+
+    def _opening_axes(self, p):
+        return (min(float(p["axis_a"]), 16.0), min(float(p["axis_b"]), 28.0))
+
+    def _lip_radius(self, gray, cx, cy, dx, dy):
+        """Jarak dari inti sampai bibir terang mulut jarum, pada satu arah."""
+        height, width = gray.shape[:2]
+        ix, iy = int(round(cx)), int(round(cy))
+        if not (0 <= ix < width and 0 <= iy < height):
+            return None
+        base = int(gray[iy, ix])
+        peak_radius = None
+        peak_value = base
+        for radius in range(2, 28):
+            x = int(round(cx + dx * radius))
+            y = int(round(cy + dy * radius))
+            if not (1 <= x < width - 1 and 1 <= y < height - 1):
+                break
+            value = int(gray[y, x])
+            if value > peak_value:
+                peak_value = value
+                peak_radius = radius
+            if (
+                peak_radius is not None
+                and peak_value >= base + 40
+                and radius >= peak_radius + 2
+                and value <= peak_value - 15
+            ):
+                return float(peak_radius)
+            if value >= 170 and radius >= 3:
+                return float(radius)
+        if peak_radius is not None and peak_value >= base + 35:
+            return float(peak_radius)
+        return None
+
+    def _fit_rim(self, gray, center):
+        """Oval mulut jarum: lebar kiri-kanan, tinggi atas-bawah, sudut tegak.
+
+        Batas atas dan bawah inilah yang menjadi garis putus-putus koridor.
+        """
+        cx, cy = float(center[0]), float(center[1])
+        left = self._lip_radius(gray, cx, cy, -1.0, 0.0)
+        right = self._lip_radius(gray, cx, cy, 1.0, 0.0)
+        up = self._lip_radius(gray, cx, cy, 0.0, -1.0)
+        down = self._lip_radius(gray, cx, cy, 0.0, 1.0)
+        if None in (left, right, up, down):
+            return None
+        oval_w = left + right
+        oval_h = up + down
+        if not (8.0 <= oval_w <= 40.0 and 10.0 <= oval_h <= 48.0):
+            return None
+        if oval_h / oval_w > 3.2 or oval_w / oval_h > 2.2:
+            return None
+        ecx = cx + (right - left) / 2.0
+        ecy = cy + (down - up) / 2.0
+        if abs(ecx - cx) > 12.0 or abs(ecy - cy) > 14.0:
+            return None
+        # Sudut 0: sumbu pertama mendatar, sumbu kedua tegak. Bentuk jarum.
+        return (float(ecx), float(ecy)), (float(oval_w), float(oval_h)), 0.0
+
+    def _precise_opening(self, gray, result):
+        fitted = self._fit_rim(gray, result["center"])
+        if fitted is None:
+            if self.opening_ellipse is None:
+                center = result["center"]
+                axes, angle = (12.0, 18.0), 0.0
+            else:
+                axes, angle = self.opening_ellipse
+                center = result["center"]
+        else:
+            center, axes, angle = fitted
+            if self.opening_ellipse is not None:
+                old_axes, _old_angle = self.opening_ellipse
+                axes = (
+                    0.65 * axes[0] + 0.35 * old_axes[0],
+                    0.65 * axes[1] + 0.35 * old_axes[1],
+                )
+            self.opening_ellipse = (axes, angle)
+        precise = dict(result)
+        precise["ellipse"] = (
+            (float(center[0]), float(center[1])),
+            (float(axes[0]), float(axes[1])),
+            float(angle),
+        )
+        precise["center"] = (float(center[0]), float(center[1]))
+        return precise
+
+    def _track_opening(self, gray, p):
+        seed = self._opening_seed(gray)
+        matched = self._match_opening(gray, p)
+        if matched is not None and (
+            seed is None or self._near(seed[:2], matched["center"], 12)
+        ):
+            self.opening_center = matched["center"]
+            return self._precise_opening(gray, matched), "TM bukaan"
+        if seed is None:
+            self._forget_opening()
+            return None, ""
+        adopted, note = self._adopt_opening(
+            gray, p, seed[:2], min(seed[2] / 80.0, 1.0)
+        )
+        if adopted is None:
+            return None, ""
+        return self._precise_opening(gray, adopted), note
+
+    def _forget_opening(self):
+        self.opening_template = None
+        self.opening_center = None
+        self.opening_ellipse = None
 
     def detect(self, gray, p):
-        result, note = super().detect(gray, p)
-        if result is None:
+        self.prepare_reference(gray.shape, p)
+        tm, tm_note = super().detect(gray, p)
+        dark, _dark_note = detect_dark_oval(
+            gray, p, previous=self.last_center
+        )
+        if dark is not None:
+            chosen, note = self._prefer_dark(gray, p, tm, tm_note, dark)
+            self._forget_opening()
+        elif self._ellipse_is_dark(gray, tm):
+            chosen, note = tm, tm_note
+            self._forget_opening()
+        else:
+            chosen, note = self._track_opening(gray, p)
+            if chosen is None and tm is not None:
+                note = "Template mengenai logam terang."
+
+        if chosen is None:
             self.misses += 1
             if self.misses > 12:
                 self.last_center = None
+                self._forget_opening()
             return None, note
 
-        cx, cy = result["center"]
+        cx, cy = chosen["center"]
         if self.last_center is not None:
             dx = cx - self.last_center[0]
             dy = cy - self.last_center[1]
             jump = (dx * dx + dy * dy) ** 0.5
-            if jump > self.MAX_JUMP and result["score"] < 0.55:
+            if jump > self.MAX_JUMP and chosen["score"] < 0.55:
                 self.misses += 1
                 if self.misses > 12:
                     self.last_center = None
@@ -430,7 +740,7 @@ class SidePinholeTracker(PinholeTracker):
 
         self.misses = 0
         self.last_center = (cx, cy)
-        return result, note
+        return chosen, note
 
 
 def tracker_for(role: str, reference_frame):

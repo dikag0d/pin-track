@@ -66,6 +66,7 @@ class BrownThreadTipTracker:
         self.smooth_angle = 0.0
         self.missed = 0
         self.from_right = True
+        self.tip_template = None
 
     def reset(self):
         self.prev_raw = None
@@ -73,6 +74,7 @@ class BrownThreadTipTracker:
         self.smooth_thickness = None
         self.smooth_angle = 0.0
         self.missed = 0
+        self.tip_template = None
 
     def preview_mask(self, frame, p):
         """Mask opened pada koordinat gambar, untuk tampilan kalibrasi.
@@ -149,6 +151,12 @@ class BrownThreadTipTracker:
         body_thickness = float(np.median(body))
         if body_thickness < MIN_BODY_THICKNESS:
             return None
+
+        # Median badan, bukan pinggiran masker yang menempel di bawah benang.
+        body_y = float(np.median(centerline[lo:hi]))
+        limit = max(8.0, body_thickness * 0.5)
+        centerline = centerline.copy()
+        centerline[np.abs(centerline - body_y) > limit] = body_y
 
         threshold = max(
             THRESHOLD_FLOOR,
@@ -311,6 +319,58 @@ class BrownThreadTipTracker:
         flipped["bbox"] = (int(width - (x + bw)), int(y), int(bw), int(bh))
         return flipped
 
+    def _store_tip_template(self, gray, tip_x, tip_y):
+        half_w, half_h = 10, 7
+        x0 = int(round(tip_x)) - half_w
+        y0 = int(round(tip_y)) - half_h
+        x1, y1 = x0 + half_w * 2 + 1, y0 + half_h * 2 + 1
+        height, width = gray.shape[:2]
+        if x0 < 0 or y0 < 0 or x1 > width or y1 > height:
+            self.tip_template = None
+            return
+        patch = gray[y0:y1, x0:x1]
+        if patch.size == 0 or float(patch.std()) < 1.0:
+            self.tip_template = None
+            return
+        self.tip_template = patch.copy()
+
+    def _match_tip_template(self, frame, tip):
+        """Cocokkan template ujung sebelumnya. Geser hanya bila selisihnya jelas."""
+        gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        tip_x, tip_y = float(tip[0]), float(tip[1])
+        template = self.tip_template
+        if template is None:
+            self._store_tip_template(gray, tip_x, tip_y)
+            return None
+        th, tw = template.shape
+        x0 = int(round(tip_x)) - 24
+        y0 = int(round(tip_y)) - 18
+        x1 = x0 + 48 + tw
+        y1 = y0 + 36 + th
+        height, width = gray.shape[:2]
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(width, x1), min(height, y1)
+        roi = gray[y0:y1, x0:x1]
+        if roi.shape[0] < th or roi.shape[1] < tw:
+            self._store_tip_template(gray, tip_x, tip_y)
+            return None
+        scores = cv2.matchTemplate(roi, template, cv2.TM_CCOEFF_NORMED)
+        scores = np.nan_to_num(scores, nan=-1.0, posinf=-1.0, neginf=-1.0)
+        _min_score, score, _min_loc, location = cv2.minMaxLoc(scores)
+        if score < 0.5:
+            self._store_tip_template(gray, tip_x, tip_y)
+            return None
+        matched = (
+            x0 + location[0] + (tw - 1) / 2.0,
+            y0 + location[1] + (th - 1) / 2.0,
+        )
+        distance = float(np.hypot(matched[0] - tip_x, matched[1] - tip_y))
+        if distance < 2.0 or distance > 16.0:
+            self._store_tip_template(gray, tip_x, tip_y)
+            return None
+        self._store_tip_template(gray, matched[0], matched[1])
+        return matched
+
     def detect(self, frame, p):
         """Kembalikan (hasil atau None, mask opened pada koordinat gambar)."""
         from_right = bool(p.get("thread_from_right", True))
@@ -329,7 +389,12 @@ class BrownThreadTipTracker:
                 self.prev_raw = None
                 self.smooth = None
                 self.smooth_thickness = None
+                self.tip_template = None
             return None, display
+
+        matched = self._match_tip_template(working, chosen["tip"])
+        if matched is not None:
+            chosen["tip"] = matched
 
         tip_x, tip_y, local, angle = self._stabilize(
             chosen["tip"], chosen["local_thickness"], chosen["angle"], p
@@ -421,7 +486,7 @@ def insertion_paths(pinhole, thread, from_right=True):
     Jalur benang selaras bila seluruh tebalnya berada di dalam bukaan
     jarum. Di luar itu ujung akan menabrak dinding lubang.
     """
-    paths = {"needle": None, "thread": None, "aligned": None}
+    paths = {"needle": None, "thread": None, "aligned": None, "entered": None}
     if pinhole is not None and pinhole.get("ellipse") is not None:
         x_min, y_min, x_max, y_max = _span(ellipse_points(pinhole["ellipse"]))
         paths["needle"] = {
@@ -447,6 +512,12 @@ def insertion_paths(pinhole, thread, from_right=True):
             band["y0"] >= needle["y0"] - tol
             and band["y1"] <= needle["y1"] + tol
         )
+        tip_x = band["tip"][0]
+        if from_right:
+            reached = tip_x <= needle["gate_x"] + tol
+        else:
+            reached = tip_x >= needle["gate_x"] - tol
+        paths["entered"] = bool(paths["aligned"] and reached)
     return paths
 
 
@@ -493,19 +564,6 @@ def format_tip_xy(
     )
 
 
-def tip_marker_radius(thread) -> int:
-    """Jari-jari satu lingkaran ujung, mengikuti tebal jalur benang."""
-    ellipse = thread.get("tip_ellipse")
-    if ellipse is not None:
-        try:
-            _x0, y0, _x1, y1 = _span(ellipse_points(ellipse))
-            return max(4, int(round((y1 - y0) / 2.0)))
-        except (TypeError, ValueError, cv2.error):
-            pass
-    thickness = thread.get("body_thickness") or thread.get("local_thickness") or 8
-    return max(4, int(round(float(thickness) / 2.0)))
-
-
 def draw_insertion_overlay(frame, pinhole, thread, from_right=True):
     """Garis putus-putus jalur jarum (hijau) dan jalur benang (kuning).
 
@@ -544,23 +602,55 @@ def draw_insertion_overlay(frame, pinhole, thread, from_right=True):
             out, label, (16, 76), cv2.FONT_HERSHEY_SIMPLEX,
             0.6, color, 1, cv2.LINE_AA,
         )
+    if paths["entered"] is True:
+        decision, decision_color = "BENANG MASUK", NEEDLE_COLOR
+    elif paths["entered"] is False:
+        decision, decision_color = "TIDAK MASUK", (0, 80, 255)
+    else:
+        decision = None
+    if decision is not None:
+        cv2.putText(
+            out, decision, (16, 100), cv2.FONT_HERSHEY_SIMPLEX,
+            0.7, decision_color, 2, cv2.LINE_AA,
+        )
     return out
+
+
+def thread_shape_ellipse(thread):
+    """Oval di ujung: sumbu panjang mengikuti benang, sumbu pendek mengikuti tebal."""
+    tip_x, tip_y = float(thread["tip"][0]), float(thread["tip"][1])
+    angle = float(thread.get("angle") or 0.0)
+    local = float(thread.get("local_thickness") or 0.0)
+    body = float(thread.get("body_thickness") or 0.0)
+    across = max(local, body * 0.85, 8.0)
+    across = float(np.clip(across, 8.0, 42.0))
+    along = float(np.clip(max(across * 2.4, 18.0), 18.0, 80.0))
+    bbox = thread.get("bbox")
+    if bbox is not None:
+        x, y, width, height = bbox
+        vx = (float(x) + float(width) / 2.0) - tip_x
+        vy = (float(y) + float(height) / 2.0) - tip_y
+        norm = float(np.hypot(vx, vy))
+        if norm > 4.0:
+            shift = along * 0.22
+            tip_x += vx / norm * shift
+            tip_y += vy / norm * shift
+            angle = float(np.degrees(np.arctan2(vy, vx)))
+    return (tip_x, tip_y), (along, across), angle
 
 
 def draw_thread(
     frame, thread, enabled=True, px_per_mm_x=0.0, px_per_mm_y=0.0,
     px_per_mm_z=0.0,
 ):
-    """Gambar satu lingkaran ujung, silang, dan koordinat dalam mm bila skala ada."""
+    """Gambar oval bentuk benang, silang ujung, dan koordinat."""
     if not enabled:
         return frame
     out = frame.copy()
     if thread is not None:
         tip_x, tip_y = thread["tip"]
         tip = (int(round(tip_x)), int(round(tip_y)))
-        radius = tip_marker_radius(thread)
-        if 0 <= tip[0] < out.shape[1] and 0 <= tip[1] < out.shape[0]:
-            cv2.circle(out, tip, radius, THREAD_PATH_COLOR, 2, cv2.LINE_AA)
+        cv2.ellipse(out, thread_shape_ellipse(thread), THREAD_PATH_COLOR, 2, cv2.LINE_AA)
         cv2.drawMarker(
             out, tip, (0, 0, 255), cv2.MARKER_CROSS, 16, 1, cv2.LINE_AA
         )
