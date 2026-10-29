@@ -597,78 +597,61 @@ class SidePinholeTracker(PinholeTracker):
     def _opening_axes(self, p):
         return (min(float(p["axis_a"]), 16.0), min(float(p["axis_b"]), 28.0))
 
-    def _major_is_vertical(self, axes, angle):
-        major = float(angle) if axes[0] >= axes[1] else float(angle) + 90.0
-        major = (major + 90.0) % 180.0 - 90.0
-        return abs(abs(major) - 90.0) <= 28.0
-
-    def _fit_rim(self, gray, center):
-        """Ellipse penuh pada mulut jarum, sampai bibir logam yang mengelilinginya."""
-        cx, cy = float(center[0]), float(center[1])
+    def _lip_radius(self, gray, cx, cy, dx, dy):
+        """Jarak dari inti sampai bibir terang mulut jarum, pada satu arah."""
         height, width = gray.shape[:2]
         ix, iy = int(round(cx)), int(round(cy))
         if not (0 <= ix < width and 0 <= iy < height):
             return None
         base = int(gray[iy, ix])
-        points = []
-        radii = []
-        for angle in np.linspace(0.0, 2.0 * np.pi, 48, endpoint=False):
-            dx, dy = float(np.cos(angle)), float(np.sin(angle))
-            peak_radius = None
-            peak_value = base
-            chosen = None
-            for radius in range(2, 26):
-                x = int(round(cx + dx * radius))
-                y = int(round(cy + dy * radius))
-                if not (1 <= x < width - 1 and 1 <= y < height - 1):
-                    break
-                value = int(gray[y, x])
-                if value > peak_value:
-                    peak_value = value
-                    peak_radius = radius
-                if (
-                    peak_radius is not None
-                    and peak_value >= base + 40
-                    and radius >= peak_radius + 2
-                    and value <= peak_value - 15
-                ):
-                    chosen = peak_radius
-                    break
-                if value >= 170 and radius >= 3:
-                    chosen = radius
-                    break
-            if chosen is None and peak_radius is not None and peak_value >= base + 35:
-                chosen = peak_radius
-            if chosen is None:
-                continue
-            points.append((cx + dx * chosen, cy + dy * chosen))
-            radii.append(float(chosen))
-        if len(points) < 16:
+        peak_radius = None
+        peak_value = base
+        for radius in range(2, 28):
+            x = int(round(cx + dx * radius))
+            y = int(round(cy + dy * radius))
+            if not (1 <= x < width - 1 and 1 <= y < height - 1):
+                break
+            value = int(gray[y, x])
+            if value > peak_value:
+                peak_value = value
+                peak_radius = radius
+            if (
+                peak_radius is not None
+                and peak_value >= base + 40
+                and radius >= peak_radius + 2
+                and value <= peak_value - 15
+            ):
+                return float(peak_radius)
+            if value >= 170 and radius >= 3:
+                return float(radius)
+        if peak_radius is not None and peak_value >= base + 35:
+            return float(peak_radius)
+        return None
+
+    def _fit_rim(self, gray, center):
+        """Oval mulut jarum: lebar kiri-kanan, tinggi atas-bawah, sudut tegak.
+
+        Batas atas dan bawah inilah yang menjadi garis putus-putus koridor.
+        """
+        cx, cy = float(center[0]), float(center[1])
+        left = self._lip_radius(gray, cx, cy, -1.0, 0.0)
+        right = self._lip_radius(gray, cx, cy, 1.0, 0.0)
+        up = self._lip_radius(gray, cx, cy, 0.0, -1.0)
+        down = self._lip_radius(gray, cx, cy, 0.0, 1.0)
+        if None in (left, right, up, down):
             return None
-        radius_values = np.array(radii, np.float64)
-        median = float(np.median(radius_values))
-        kept = [
-            point
-            for point, radius in zip(points, radii)
-            if abs(radius - median) <= max(4.0, 0.55 * median)
-        ]
-        if len(kept) < 12:
+        oval_w = left + right
+        oval_h = up + down
+        if not (8.0 <= oval_w <= 40.0 and 10.0 <= oval_h <= 48.0):
             return None
-        (ecx, ecy), axes, angle = cv2.fitEllipse(np.array(kept, np.float32))
-        # Sedikit lebih besar supaya garis hijau menutup seluruh mulut, bukan hanya inti.
-        axes = (float(axes[0]) * 1.18, float(axes[1]) * 1.18)
-        minor, major = min(axes), max(axes)
-        round_enough = major / max(minor, 1.0) <= 1.5
-        if (
-            (not round_enough and not self._major_is_vertical(axes, angle))
-            or minor < 8.0
-            or major > 42.0
-            or major / max(minor, 1.0) > 2.4
-            or abs(float(ecx) - cx) > 10.0
-            or abs(float(ecy) - cy) > 12.0
-        ):
+        if oval_h / oval_w > 3.2 or oval_w / oval_h > 2.2:
             return None
-        return (float(ecx), float(ecy)), axes, float(angle)
+        ecx = cx + (right - left) / 2.0
+        ecy = cy + (down - up) / 2.0
+        if abs(ecx - cx) > 12.0 or abs(ecy - cy) > 14.0:
+            return None
+        # Sudut 0: sumbu pertama mendatar, sumbu kedua tegak. Bentuk jarum.
+        return (float(ecx), float(ecy)), (float(oval_w), float(oval_h)), 0.0
 
     def _precise_opening(self, gray, result):
         fitted = self._fit_rim(gray, result["center"])
