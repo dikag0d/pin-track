@@ -395,7 +395,12 @@ def detect_dark_oval(gray, p, previous=None):
 
 
 class SidePinholeTracker(PinholeTracker):
-    """Pelacak samping: oval gelap di dalam daerah pencarian."""
+    """Pelacak samping: template matching multi-skala + ECC affine (sama seperti TOP).
+
+    Algoritme identik dengan PinholeTracker.detect; hanya menambahkan
+    pengecekan loncatan pusat antar-frame untuk menolak deteksi yang melompat
+    terlalu jauh ketika skor rendah.
+    """
 
     MAX_JUMP = 42.0
 
@@ -405,7 +410,7 @@ class SidePinholeTracker(PinholeTracker):
         self.misses = 0
 
     def detect(self, gray, p):
-        result, note = detect_dark_oval(gray, p, self.last_center)
+        result, note = super().detect(gray, p)
         if result is None:
             self.misses += 1
             if self.misses > 12:
