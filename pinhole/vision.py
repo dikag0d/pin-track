@@ -419,6 +419,7 @@ class SidePinholeTracker(PinholeTracker):
         self.misses = 0
         self.opening_template = None
         self.opening_center = None
+        self.opening_ellipse = None
 
     def _ellipse_is_dark(self, gray, result):
         if result is None:
@@ -596,6 +597,87 @@ class SidePinholeTracker(PinholeTracker):
     def _opening_axes(self, p):
         return (min(float(p["axis_a"]), 16.0), min(float(p["axis_b"]), 28.0))
 
+    def _major_is_vertical(self, axes, angle):
+        major = float(angle) if axes[0] >= axes[1] else float(angle) + 90.0
+        major = (major + 90.0) % 180.0 - 90.0
+        return abs(abs(major) - 90.0) <= 28.0
+
+    def _fit_rim(self, gray, center):
+        """Ellipse pada bibir bukaan: lompatan terang di sekeliling inti gelap."""
+        cx, cy = float(center[0]), float(center[1])
+        height, width = gray.shape[:2]
+        points = []
+        for angle in np.linspace(0.0, 2.0 * np.pi, 72, endpoint=False):
+            dx, dy = float(np.cos(angle)), float(np.sin(angle))
+            previous = None
+            hit = None
+            for radius in np.linspace(2.0, 18.0, 32):
+                x = int(round(cx + dx * radius))
+                y = int(round(cy + dy * radius))
+                if not (0 <= x < width and 0 <= y < height):
+                    break
+                value = int(gray[y, x])
+                if previous is not None and value - previous > 22 and value > 85:
+                    hit = (float(x), float(y), radius)
+                    break
+                previous = value
+            if hit is not None:
+                points.append(hit)
+        if len(points) < 16:
+            return None
+        radii = np.array([item[2] for item in points], np.float64)
+        median = float(np.median(radii))
+        kept = [
+            (item[0], item[1])
+            for item in points
+            if abs(item[2] - median) <= max(3.5, 0.4 * median)
+        ]
+        if len(kept) < 12:
+            return None
+        (ecx, ecy), axes, angle = cv2.fitEllipse(
+            np.array(kept, np.float32)
+        )
+        axes = (float(axes[0]), float(axes[1]))
+        minor, major = min(axes), max(axes)
+        if (
+            not self._major_is_vertical(axes, angle)
+            or minor < 6.0
+            or major > 26.0
+            or major / max(minor, 1.0) > 2.2
+            or abs(ecx - cx) > 8.0
+            or abs(ecy - cy) > 8.0
+        ):
+            return None
+        return (float(ecx), float(ecy)), axes, float(angle)
+
+    def _precise_opening(self, gray, result):
+        fitted = self._fit_rim(gray, result["center"])
+        if fitted is None:
+            if self.opening_ellipse is None:
+                center = result["center"]
+                axes, angle = (12.0, 18.0), 0.0
+            else:
+                axes, angle = self.opening_ellipse
+                center = result["center"]
+        else:
+            center, axes, angle = fitted
+            axes = (axes[0] * 1.15, axes[1] * 1.15)
+            if self.opening_ellipse is not None:
+                old_axes, _old_angle = self.opening_ellipse
+                axes = (
+                    0.65 * axes[0] + 0.35 * old_axes[0],
+                    0.65 * axes[1] + 0.35 * old_axes[1],
+                )
+            self.opening_ellipse = (axes, angle)
+        precise = dict(result)
+        precise["ellipse"] = (
+            (float(center[0]), float(center[1])),
+            (float(axes[0]), float(axes[1])),
+            float(angle),
+        )
+        precise["center"] = (float(center[0]), float(center[1]))
+        return precise
+
     def _track_opening(self, gray, p):
         seed = self._opening_seed(gray)
         matched = self._match_opening(gray, p)
@@ -603,15 +685,21 @@ class SidePinholeTracker(PinholeTracker):
             seed is None or self._near(seed[:2], matched["center"], 12)
         ):
             self.opening_center = matched["center"]
-            return matched, "TM bukaan"
+            return self._precise_opening(gray, matched), "TM bukaan"
         if seed is None:
             self._forget_opening()
             return None, ""
-        return self._adopt_opening(gray, p, seed[:2], min(seed[2] / 80.0, 1.0))
+        adopted, note = self._adopt_opening(
+            gray, p, seed[:2], min(seed[2] / 80.0, 1.0)
+        )
+        if adopted is None:
+            return None, ""
+        return self._precise_opening(gray, adopted), note
 
     def _forget_opening(self):
         self.opening_template = None
         self.opening_center = None
+        self.opening_ellipse = None
 
     def detect(self, gray, p):
         self.prepare_reference(gray.shape, p)

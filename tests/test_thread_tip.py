@@ -352,12 +352,10 @@ class InsertionPathTest(unittest.TestCase):
             (out[:, :, 1] > 200) & (out[:, :, 2] > 200) & (out[:, :, 0] < 80)
         )
         yellow[:80, :] = False
-        self.assertTrue(bool(yellow[220, 410]))
-        self.assertFalse(bool(yellow[220, 414]))
+        self.assertFalse(bool(yellow[220, 420]))
         ys, xs = np.where(yellow)
-        radius = np.hypot(xs - 420.4, ys - 220.6)
-        self.assertGreater(float(np.median(radius)), 8.0)
-        self.assertLess(float(np.median(radius)), 12.0)
+        self.assertGreater(int(xs.max()) - int(xs.min()), int(ys.max()) - int(ys.min()))
+        self.assertGreater(float(np.median(np.hypot(xs - 420.4, ys - 220.6))), 8.0)
 
 
 class ThreadGuiTest(unittest.TestCase):
