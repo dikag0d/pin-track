@@ -603,49 +603,69 @@ class SidePinholeTracker(PinholeTracker):
         return abs(abs(major) - 90.0) <= 28.0
 
     def _fit_rim(self, gray, center):
-        """Ellipse pada bibir bukaan: lompatan terang di sekeliling inti gelap."""
+        """Ellipse penuh pada mulut jarum, sampai bibir logam yang mengelilinginya."""
         cx, cy = float(center[0]), float(center[1])
         height, width = gray.shape[:2]
+        ix, iy = int(round(cx)), int(round(cy))
+        if not (0 <= ix < width and 0 <= iy < height):
+            return None
+        base = int(gray[iy, ix])
         points = []
-        for angle in np.linspace(0.0, 2.0 * np.pi, 72, endpoint=False):
+        radii = []
+        for angle in np.linspace(0.0, 2.0 * np.pi, 48, endpoint=False):
             dx, dy = float(np.cos(angle)), float(np.sin(angle))
-            previous = None
-            hit = None
-            for radius in np.linspace(2.0, 18.0, 32):
+            peak_radius = None
+            peak_value = base
+            chosen = None
+            for radius in range(2, 26):
                 x = int(round(cx + dx * radius))
                 y = int(round(cy + dy * radius))
-                if not (0 <= x < width and 0 <= y < height):
+                if not (1 <= x < width - 1 and 1 <= y < height - 1):
                     break
                 value = int(gray[y, x])
-                if previous is not None and value - previous > 22 and value > 85:
-                    hit = (float(x), float(y), radius)
+                if value > peak_value:
+                    peak_value = value
+                    peak_radius = radius
+                if (
+                    peak_radius is not None
+                    and peak_value >= base + 40
+                    and radius >= peak_radius + 2
+                    and value <= peak_value - 15
+                ):
+                    chosen = peak_radius
                     break
-                previous = value
-            if hit is not None:
-                points.append(hit)
+                if value >= 170 and radius >= 3:
+                    chosen = radius
+                    break
+            if chosen is None and peak_radius is not None and peak_value >= base + 35:
+                chosen = peak_radius
+            if chosen is None:
+                continue
+            points.append((cx + dx * chosen, cy + dy * chosen))
+            radii.append(float(chosen))
         if len(points) < 16:
             return None
-        radii = np.array([item[2] for item in points], np.float64)
-        median = float(np.median(radii))
+        radius_values = np.array(radii, np.float64)
+        median = float(np.median(radius_values))
         kept = [
-            (item[0], item[1])
-            for item in points
-            if abs(item[2] - median) <= max(3.5, 0.4 * median)
+            point
+            for point, radius in zip(points, radii)
+            if abs(radius - median) <= max(4.0, 0.55 * median)
         ]
         if len(kept) < 12:
             return None
-        (ecx, ecy), axes, angle = cv2.fitEllipse(
-            np.array(kept, np.float32)
-        )
-        axes = (float(axes[0]), float(axes[1]))
+        (ecx, ecy), axes, angle = cv2.fitEllipse(np.array(kept, np.float32))
+        # Sedikit lebih besar supaya garis hijau menutup seluruh mulut, bukan hanya inti.
+        axes = (float(axes[0]) * 1.18, float(axes[1]) * 1.18)
         minor, major = min(axes), max(axes)
+        round_enough = major / max(minor, 1.0) <= 1.5
         if (
-            not self._major_is_vertical(axes, angle)
-            or minor < 6.0
-            or major > 26.0
-            or major / max(minor, 1.0) > 2.2
-            or abs(ecx - cx) > 8.0
-            or abs(ecy - cy) > 8.0
+            (not round_enough and not self._major_is_vertical(axes, angle))
+            or minor < 8.0
+            or major > 42.0
+            or major / max(minor, 1.0) > 2.4
+            or abs(float(ecx) - cx) > 10.0
+            or abs(float(ecy) - cy) > 12.0
         ):
             return None
         return (float(ecx), float(ecy)), axes, float(angle)
@@ -661,7 +681,6 @@ class SidePinholeTracker(PinholeTracker):
                 center = result["center"]
         else:
             center, axes, angle = fitted
-            axes = (axes[0] * 1.15, axes[1] * 1.15)
             if self.opening_ellipse is not None:
                 old_axes, _old_angle = self.opening_ellipse
                 axes = (
