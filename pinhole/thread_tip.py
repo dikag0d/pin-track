@@ -66,6 +66,7 @@ class BrownThreadTipTracker:
         self.smooth_angle = 0.0
         self.missed = 0
         self.from_right = True
+        self.tip_template = None
 
     def reset(self):
         self.prev_raw = None
@@ -73,6 +74,7 @@ class BrownThreadTipTracker:
         self.smooth_thickness = None
         self.smooth_angle = 0.0
         self.missed = 0
+        self.tip_template = None
 
     def preview_mask(self, frame, p):
         """Mask opened pada koordinat gambar, untuk tampilan kalibrasi.
@@ -149,6 +151,12 @@ class BrownThreadTipTracker:
         body_thickness = float(np.median(body))
         if body_thickness < MIN_BODY_THICKNESS:
             return None
+
+        # Median badan, bukan pinggiran masker yang menempel di bawah benang.
+        body_y = float(np.median(centerline[lo:hi]))
+        limit = max(8.0, body_thickness * 0.5)
+        centerline = centerline.copy()
+        centerline[np.abs(centerline - body_y) > limit] = body_y
 
         threshold = max(
             THRESHOLD_FLOOR,
@@ -311,6 +319,58 @@ class BrownThreadTipTracker:
         flipped["bbox"] = (int(width - (x + bw)), int(y), int(bw), int(bh))
         return flipped
 
+    def _store_tip_template(self, gray, tip_x, tip_y):
+        half_w, half_h = 10, 7
+        x0 = int(round(tip_x)) - half_w
+        y0 = int(round(tip_y)) - half_h
+        x1, y1 = x0 + half_w * 2 + 1, y0 + half_h * 2 + 1
+        height, width = gray.shape[:2]
+        if x0 < 0 or y0 < 0 or x1 > width or y1 > height:
+            self.tip_template = None
+            return
+        patch = gray[y0:y1, x0:x1]
+        if patch.size == 0 or float(patch.std()) < 1.0:
+            self.tip_template = None
+            return
+        self.tip_template = patch.copy()
+
+    def _match_tip_template(self, frame, tip):
+        """Cocokkan template ujung sebelumnya. Geser hanya bila selisihnya jelas."""
+        gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        tip_x, tip_y = float(tip[0]), float(tip[1])
+        template = self.tip_template
+        if template is None:
+            self._store_tip_template(gray, tip_x, tip_y)
+            return None
+        th, tw = template.shape
+        x0 = int(round(tip_x)) - 24
+        y0 = int(round(tip_y)) - 18
+        x1 = x0 + 48 + tw
+        y1 = y0 + 36 + th
+        height, width = gray.shape[:2]
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(width, x1), min(height, y1)
+        roi = gray[y0:y1, x0:x1]
+        if roi.shape[0] < th or roi.shape[1] < tw:
+            self._store_tip_template(gray, tip_x, tip_y)
+            return None
+        scores = cv2.matchTemplate(roi, template, cv2.TM_CCOEFF_NORMED)
+        scores = np.nan_to_num(scores, nan=-1.0, posinf=-1.0, neginf=-1.0)
+        _min_score, score, _min_loc, location = cv2.minMaxLoc(scores)
+        if score < 0.5:
+            self._store_tip_template(gray, tip_x, tip_y)
+            return None
+        matched = (
+            x0 + location[0] + (tw - 1) / 2.0,
+            y0 + location[1] + (th - 1) / 2.0,
+        )
+        distance = float(np.hypot(matched[0] - tip_x, matched[1] - tip_y))
+        if distance < 2.0 or distance > 16.0:
+            self._store_tip_template(gray, tip_x, tip_y)
+            return None
+        self._store_tip_template(gray, matched[0], matched[1])
+        return matched
+
     def detect(self, frame, p):
         """Kembalikan (hasil atau None, mask opened pada koordinat gambar)."""
         from_right = bool(p.get("thread_from_right", True))
@@ -329,7 +389,12 @@ class BrownThreadTipTracker:
                 self.prev_raw = None
                 self.smooth = None
                 self.smooth_thickness = None
+                self.tip_template = None
             return None, display
+
+        matched = self._match_tip_template(working, chosen["tip"])
+        if matched is not None:
+            chosen["tip"] = matched
 
         tip_x, tip_y, local, angle = self._stabilize(
             chosen["tip"], chosen["local_thickness"], chosen["angle"], p
